@@ -2,10 +2,10 @@
 Docker (compose) environment for the DFKI MobiPick lab (https://github.com/DFKI-NI/mobipick_labs)
 
 # Dependencies
-Install docker (or mobi) and docker-compose, install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html) if you have an nvidia graphics card.
+Install docker (or mobi) and docker compose, install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html) if you have an nvidia graphics card.
 
 # Usage
-If you just want to run the simulation without planning and without rviz `mobipick.bash`. It will download all required container and start the mobipick-gazebo environment for the tables demo (see `command:` in `docker-compose.yml`).
+If you just want to run the simulation without planning and without rviz `mobipick.bash`. It will download all required container and start the mobipick-gazebo environment for the tables demo (see `command:` in `docker compose.yml`).
 
 To run custom ROS commands just prefix them with `./cmd.bash`. This starts a new docker container with your command connected to the ROScore of the mobipick-container instance.
 
@@ -19,7 +19,7 @@ One of them is a terminal window with a bash inside a connected docker container
 
 ![](doc/mobipick_lab_terminator_overview.png)
 
-When you close the terminator-window `docker-compose down` will be called to stop all container again.
+When you close the terminator-window `docker compose down` will be called to stop all container again.
 
 ### Option 2: run each command separately
 Instead of starting all docker container and run one terminator for logging you can also start everything in single commands:
@@ -30,4 +30,4 @@ Instead of starting all docker container and run one terminator for logging you 
 1. (optional) it could also be helpful to run another terminal inside a docker container to call ROS commands and test stuff, just run `./cmd.bash bash` to start one.
 
 ## Shutdown
-To stop everything call `docker-compose down`.
+To stop everything call `docker compose down`.
