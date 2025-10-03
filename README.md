@@ -9,19 +9,9 @@ If you just want to run the simulation without planning and without rviz `mobipi
 
 To run custom ROS commands just prefix them with `./cmd.bash`. This starts a new docker container with your command connected to the ROScore of the mobipick-container instance.
 
-Take a look at the `terminator.conf` file if you are interested how it all works together. If you have a slow PC you might also want to increase the values of `sleep` times to give Gazebo some more time to startup the simulation before planning.
-
 ## Example Run
-### Option 1: run everything at once in terminator
-Call the `./run.bash` script that starts up 4 docker container in separated terminator shells.
-One of them is a terminal window with a bash inside a connected docker container in the top-left where you can call ROS-commands, the others are for rviz, mobipick simulation and the tables_demo_node, details are described in Option2.
 
-
-![](doc/mobipick_lab_terminator_overview.png)
-
-When you close the terminator-window `docker compose down` will be called to stop all container again.
-
-### Option 2: run each command separately
+### Option 1: run each command separately
 Instead of starting all docker container and run one terminator for logging you can also start everything in single commands:
 
 1. open a first terminal and run `./mobipick.bash` to start the Gazebo robot simulation with the mobipick robot inside.
