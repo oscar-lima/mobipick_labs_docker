@@ -19,5 +19,11 @@ Instead of starting all docker container and run one terminator for logging you 
 1. in a second window (or third window if you run rviz as well) start the autonomous planning `./cmd.bash rosrun tables_demo_planning tables_demo_node.py`.
 1. (optional) it could also be helpful to run another terminal inside a docker container to call ROS commands and test stuff, just run `./cmd.bash bash` to start one.
 
+### Option 2: GUI Quick Start
+- Launch the GUI with `python gui.py`; the top row toggles (Roscore, Sim, Tables Demo, RViz, RQt, Scripts) manage single instances.
+- Always start Roscore first—other toggles do it automatically but the master must stay up for everything else.
+- User scripts live in `./scripts/`; edit locally, then use the Scripts toggle to run/stop them inside `mobipick_cmd`.
+- The Sim/Tables/RViz/RQt toggles send output to their named tabs; use `Update Status` if you need to resync button state with running containers.
+
 ## Shutdown
 To stop everything call `docker compose down`.
