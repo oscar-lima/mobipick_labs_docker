@@ -14,6 +14,10 @@ from urllib.parse import parse_qs, urlparse
 from .web_assets import INDEX_HTML
 from .web_bridge import WebBridge
 from .web_controller import WebController
+from .logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -35,6 +39,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
         return
 
     def _write_response(self, status: HTTPStatus, body: bytes, content_type: str = 'application/json') -> None:
+        logger.debug('Responding %s to %s %s', status.value, self.command, self.path)
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
@@ -64,18 +69,21 @@ class _RequestHandler(BaseHTTPRequestHandler):
         return getattr(self.server, 'controller')  # type: ignore[no-any-return]
 
     def do_GET(self) -> None:  # noqa: N802 - required signature
+        logger.debug('Handling GET %s', self.path)
         parsed = urlparse(self.path)
         if parsed.path in {'/', '/index.html'}:
             self._write_response(HTTPStatus.OK, INDEX_HTML.encode('utf-8'), 'text/html; charset=utf-8')
             return
         if parsed.path == '/api/snapshot':
             snapshot = self.bridge.snapshot()
+            logger.debug('Snapshot includes %d tabs, %d toggles, %d events', len(snapshot['tabs']), len(snapshot['toggles']), len(snapshot['events']))
             self._json(snapshot)
             return
         if parsed.path == '/api/events':
             query = parse_qs(parsed.query)
             since = int(query.get('since', ['0'])[0] or 0)
             events = self.bridge.events_since(since)
+            logger.debug('Returning %d events since id %d', len(events), since)
             self._json(events)
             return
         if parsed.path == '/api/health':
@@ -84,6 +92,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self._write_response(HTTPStatus.NOT_FOUND, b'Not Found', 'text/plain; charset=utf-8')
 
     def do_POST(self) -> None:  # noqa: N802 - required signature
+        logger.debug('Handling POST %s', self.path)
         parsed = urlparse(self.path)
         if parsed.path != '/api/action':
             self._write_response(HTTPStatus.NOT_FOUND, b'Not Found', 'text/plain; charset=utf-8')
@@ -91,27 +100,33 @@ class _RequestHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get('Content-Length', '0'))
         except ValueError:
+            logger.warning('Invalid Content-Length header: %s', self.headers.get('Content-Length'))
             self._bad_request('Invalid Content-Length header')
             return
         raw = self.rfile.read(length) if length > 0 else b''
         try:
             data = json.loads(raw.decode('utf-8') or '{}')
         except json.JSONDecodeError:
+            logger.warning('Failed to decode JSON payload: %s', raw)
             self._bad_request('Invalid JSON payload')
             return
         action = data.get('action')
         payload = data.get('payload') or {}
         if not isinstance(payload, dict):
+            logger.warning('Invalid payload type for action %s: %r', action, type(payload))
             self._bad_request('Payload must be an object')
             return
         if not isinstance(action, str) or not action:
+            logger.warning('Missing action in request: %s', data)
             self._bad_request('Action is required')
             return
         try:
             result = self.controller.handle(action, payload)
         except Exception as exc:  # noqa: BLE001 - propagate to caller
+            logger.exception('Controller error while handling action %s', action)
             self._json({'error': str(exc)}, HTTPStatus.BAD_REQUEST)
             return
+        logger.debug('Action %s completed with result keys %s', action, list(result.keys()))
         self._json(result)
 
 
@@ -138,30 +153,37 @@ class WebUiServer:
 
     def start(self) -> None:
         if self._server is not None:
+            logger.debug('WebUiServer already running at %s', self.address)
             return
 
         def _serve():
+            logger.debug('WebUiServer serving loop entering on %s:%s', self._host, self._port)
             with _ThreadingHTTPServer((self._host, self._port), _RequestHandler, bridge=self._bridge, controller=self._controller) as server:
                 self._server = server
                 self._ready.set()
                 try:
                     server.serve_forever()
                 finally:
+                    logger.debug('WebUiServer serve_forever exited')
                     self._server = None
 
         self._thread = threading.Thread(target=_serve, name='web-ui-server', daemon=True)
         self._thread.start()
         self._ready.wait(timeout=5)
+        logger.debug('WebUiServer thread started; address=%s', self.address)
 
     def stop(self) -> None:
         server = self._server
         if server is None:
+            logger.debug('WebUiServer stop requested but server already stopped')
             return
+        logger.debug('Shutting down WebUiServer at %s', self.address)
         server.shutdown()
         server.server_close()
         self._server = None
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
+        logger.debug('WebUiServer thread stopped')
         self._thread = None
 
 

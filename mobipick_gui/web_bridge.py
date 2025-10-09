@@ -8,6 +8,10 @@ from typing import Any, Callable, Iterable, List, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from .logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 @dataclass(slots=True)
 class _TabState:
@@ -79,6 +83,7 @@ class WebBridge(QObject):
         self._status: dict[str, Any] = {}
         self._qt_thread_id = threading.get_ident()
         self.invoke_signal.connect(self._dispatch_invocation)
+        logger.debug('WebBridge initialized (max_events=%d, max_logs=%d)', self._max_events, self._max_logs)
 
     # ------------------------------------------------------------------
     # Invocation helpers
@@ -88,6 +93,7 @@ class WebBridge(QObject):
 
         if window.thread() is not None and window.thread() is not self.thread():
             self.moveToThread(window.thread())
+            logger.debug('WebBridge moved to GUI thread %s', window.thread())
 
     def _dispatch_invocation(self, callback: Callable[[], Any]) -> None:
         try:
@@ -95,7 +101,7 @@ class WebBridge(QObject):
         except Exception:
             # We intentionally swallow exceptions here; they will surface
             # through the GUI logging path instead.
-            pass
+            logger.exception('Exception occurred during bridge invocation')
 
     def invoke(self, callback: Callable[[], Any]) -> None:
         """Schedule *callback* to run on the Qt GUI thread."""
@@ -103,6 +109,7 @@ class WebBridge(QObject):
         if threading.get_ident() == self._qt_thread_id:
             callback()
             return
+        logger.debug('Scheduling callback on GUI thread (qt_thread_id=%s)', self._qt_thread_id)
         self.invoke_signal.emit(callback)
 
     # ------------------------------------------------------------------
@@ -120,11 +127,13 @@ class WebBridge(QObject):
             self._events.append(event)
             if len(self._events) > self._max_events:
                 self._events = self._events[-self._max_events :]
+        logger.debug('Published event %s #%d', event_type, event["id"])
 
     def snapshot(self) -> dict[str, Any]:
         """Return a snapshot of the mirrored state."""
 
         with self._lock:
+            logger.debug('Snapshot requested; %d tabs cached, %d events stored', len(self._tabs), len(self._events))
             return {
                 "toggles": dict(self._toggles),
                 "tabs": {k: {
@@ -144,7 +153,9 @@ class WebBridge(QObject):
                 return []
             if event_id <= 0:
                 return list(self._events)
-            return [evt for evt in self._events if evt["id"] > event_id]
+            events = [evt for evt in self._events if evt["id"] > event_id]
+        logger.debug('events_since(%d) -> %d events', event_id, len(events))
+        return events
 
     # ------------------------------------------------------------------
     # GUI -> web updates
@@ -162,6 +173,7 @@ class WebBridge(QObject):
                 changed = True
         if changed:
             self._publish_event("tab", {"key": key, "label": label, "closable": closable})
+            logger.debug('ensure_tab updated %s (label=%s closable=%s)', key, label, closable)
 
     def remove_tab(self, key: str) -> None:
         removed = False
@@ -171,6 +183,7 @@ class WebBridge(QObject):
                 removed = True
         if removed:
             self._publish_event("tab_removed", {"key": key})
+            logger.debug('Removed tab %s', key)
 
     def append_log(self, key: str, html_text: str, *, origin: str) -> None:
         log_item = {
@@ -184,6 +197,7 @@ class WebBridge(QObject):
             if len(tab.logs) > self._max_logs:
                 tab.logs = tab.logs[-self._max_logs :]
         self._publish_event("log", {"key": key, **log_item})
+        logger.debug('Appended log for tab %s (origin=%s)', key, origin)
 
     def update_toggle(
         self,
@@ -202,6 +216,7 @@ class WebBridge(QObject):
                 "colors": dict(colors),
             }
         self._publish_event("toggle", {"key": key, **self._toggles[key]})
+        logger.debug('Toggle %s updated -> %s', key, state)
 
     def update_combobox(
         self,
@@ -219,11 +234,13 @@ class WebBridge(QObject):
             "combobox",
             {"name": name, "options": list(options), "current": current},
         )
+        logger.debug('Combobox %s updated (current=%s)', name, current)
 
     def record_status(self, key: str, value: Any) -> None:
         with self._lock:
             self._status[key] = value
         self._publish_event("status", {"key": key, "value": value})
+        logger.debug('Status %s recorded -> %s', key, value)
 
     # ------------------------------------------------------------------
     # Shutdown helpers
@@ -237,6 +254,7 @@ class WebBridge(QObject):
                 "ts": time.time(),
             })
             self._next_event_id += 1
+        logger.debug('WebBridge shutdown event recorded')
 
 
 __all__ = ["WebBridge", "NullWebBridge"]

@@ -5,6 +5,10 @@ from typing import Any, Callable
 
 from .main_window import MainWindow
 from .web_bridge import WebBridge
+from .logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class WebController:
@@ -13,6 +17,7 @@ class WebController:
     def __init__(self, window: MainWindow, bridge: WebBridge):
         self._window = window
         self._bridge = bridge
+        logger.debug('WebController initialized with window=%s', window)
 
     # ------------------------------------------------------------------
     # Public API
@@ -36,7 +41,10 @@ class WebController:
         handler = handlers.get(action)
         if handler is None:
             raise ValueError(f'Unknown action: {action}')
-        return handler(payload)
+        logger.debug('Handling action %s with payload keys %s', action, list(payload.keys()))
+        result = handler(payload)
+        logger.debug('Action %s result: %s', action, result)
+        return result
 
     # ------------------------------------------------------------------
     # Action handlers
@@ -45,6 +53,7 @@ class WebController:
         state = self._window._toggle_states.get(key)
         if state == 'yellow':
             self._window._append_gui_html('log', f'<i>{key} is busy, please wait...</i>')
+            logger.debug('Guard prevented action for %s because state is %s', key, state)
             return False
         return True
 

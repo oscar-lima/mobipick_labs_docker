@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import os
 import re
 import shlex
@@ -37,15 +38,20 @@ from PyQt5.QtWidgets import (
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .config import CONFIG, DEFAULT_YAML_PATH, PROJECT_ROOT, SCRIPT_CLEAN
 from .process_tab import ProcessTab
+from .logging_utils import get_logger
 from .web_bridge import NullWebBridge, WebBridge
 
 _SIGINT_TRIGGERED = False
+
+
+logger = get_logger(__name__)
 
 
 def trigger_sigint():
     """Signal the GUI to start its shutdown sequence."""
     global _SIGINT_TRIGGERED
     _SIGINT_TRIGGERED = True
+    logger.debug('trigger_sigint set flag to %s', _SIGINT_TRIGGERED)
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +67,7 @@ class MainWindow(QMainWindow):
         self._web_bridge = web_bridge or NullWebBridge()
         if web_bridge is not None:
             web_bridge.attach_window(self)
+        logger.debug('MainWindow initialized (verbosity=%d, web_bridge=%s)', self._verbosity, type(self._web_bridge).__name__)
 
         window_cfg = CONFIG['window']
         self.setWindowTitle(window_cfg['title'])
@@ -539,6 +546,8 @@ class MainWindow(QMainWindow):
         return bool(args_or_str) and args_or_str[0] == 'docker'
 
     def _console_log(self, level: int, message: str):
+        log_level = logging.INFO if level <= 1 else logging.DEBUG
+        logger.log(log_level, message)
         if self._verbosity >= level:
             print(message, flush=True)
 
