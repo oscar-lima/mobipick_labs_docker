@@ -254,304 +254,555 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </section>
     </main>
     <script>
-      const state = {
-        toggles: {},
-        tabs: {},
-        combobox: {},
-        status: {},
-        selectedTabs: new Set(),
-        layoutColumns: 2,
-        lastEvent: 0,
-      };
+      (function () {
+        'use strict';
 
-      async function getJSON(url) {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) {
-          throw new Error(`Request failed: ${res.status}`);
+        var state = {
+          toggles: {},
+          tabs: {},
+          combobox: {},
+          status: {},
+          selectedTabs: [],
+          layoutColumns: 2,
+          lastEvent: 0
+        };
+
+        function hasOwn(obj, key) {
+          return Object.prototype.hasOwnProperty.call(obj, key);
         }
-        return res.json();
-      }
 
-      async function postJSON(url, body) {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Request failed: ${res.status} ${text}`);
+        function isArray(value) {
+          return Object.prototype.toString.call(value) === '[object Array]';
         }
-        return res.json();
-      }
 
-      function applySnapshot(snapshot) {
-        state.toggles = snapshot.toggles || {};
-        state.combobox = snapshot.combobox || {};
-        state.status = snapshot.status || {};
-        state.tabs = {};
-        const tabs = snapshot.tabs || {};
-        Object.keys(tabs).forEach((key) => {
-          const tab = tabs[key];
-          state.tabs[key] = {
-            key,
-            label: tab.label || key,
-            closable: Boolean(tab.closable),
-            logs: Array.isArray(tab.logs) ? tab.logs.slice() : [],
-          };
-        });
-        const events = snapshot.events || [];
-        events.forEach((evt) => {
-          state.lastEvent = Math.max(state.lastEvent, evt.id || 0);
-          applyEvent(evt);
-        });
-        if (!state.selectedTabs.size) {
-          Object.keys(state.tabs).slice(0, 3).forEach((key) => state.selectedTabs.add(key));
+        function escapeHtml(text) {
+          if (text === undefined || text === null) {
+            return '';
+          }
+          return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
         }
-        renderAll();
-      }
 
-      function applyEvent(evt) {
-        if (!evt || !evt.type) return;
-        const payload = evt.payload || {};
-        switch (evt.type) {
-          case 'toggle':
-            state.toggles[payload.key] = payload;
-            break;
-          case 'tab': {
-            const key = payload.key;
-            if (!key) break;
-            const existing = state.tabs[key];
-            if (existing) {
-              existing.label = payload.label || existing.label;
-              existing.closable = Boolean(payload.closable);
-            } else {
+        function safeOriginClass(origin) {
+          var value = origin || 'container';
+          return value.replace(/[^a-zA-Z0-9_-]/g, '');
+        }
+
+        function hasSelectedTab(key) {
+          return state.selectedTabs.indexOf(key) !== -1;
+        }
+
+        function addSelectedTab(key) {
+          if (!hasSelectedTab(key)) {
+            state.selectedTabs.push(key);
+          }
+        }
+
+        function removeSelectedTab(key) {
+          var idx = state.selectedTabs.indexOf(key);
+          if (idx !== -1) {
+            state.selectedTabs.splice(idx, 1);
+          }
+        }
+
+        function filterSelectedTabs() {
+          for (var i = state.selectedTabs.length - 1; i >= 0; i -= 1) {
+            var key = state.selectedTabs[i];
+            if (!hasOwn(state.tabs, key)) {
+              state.selectedTabs.splice(i, 1);
+            }
+          }
+        }
+
+        function setStatus(text) {
+          var element = document.getElementById('status-line');
+          if (element) {
+            element.textContent = text;
+          }
+        }
+
+        function getJSON(url) {
+          if (typeof window.fetch === 'function') {
+            return fetch(url, { cache: 'no-store' }).then(function (res) {
+              if (!res.ok) {
+                throw new Error('Request failed: ' + res.status);
+              }
+              return res.json();
+            });
+          }
+          return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.setRequestHeader('Cache-Control', 'no-store');
+            xhr.onreadystatechange = function () {
+              if (xhr.readyState === 4) {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  try {
+                    resolve(JSON.parse(xhr.responseText || 'null'));
+                  } catch (err) {
+                    reject(err);
+                  }
+                } else {
+                  reject(new Error('Request failed: ' + xhr.status));
+                }
+              }
+            };
+            xhr.onerror = function () {
+              reject(new Error('Network error'));
+            };
+            xhr.send(null);
+          });
+        }
+
+        function postJSON(url, body) {
+          if (typeof window.fetch === 'function') {
+            return fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            }).then(function (res) {
+              if (!res.ok) {
+                return res.text().then(function (text) {
+                  throw new Error('Request failed: ' + res.status + ' ' + text);
+                });
+              }
+              return res.json();
+            });
+          }
+          return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', url, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+              if (xhr.readyState === 4) {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  try {
+                    resolve(JSON.parse(xhr.responseText || 'null'));
+                  } catch (err) {
+                    reject(err);
+                  }
+                } else {
+                  reject(new Error('Request failed: ' + xhr.status + ' ' + (xhr.responseText || '')));
+                }
+              }
+            };
+            xhr.onerror = function () {
+              reject(new Error('Network error'));
+            };
+            xhr.send(JSON.stringify(body || {}));
+          });
+        }
+
+        function applySnapshot(snapshot) {
+          state.toggles = snapshot && snapshot.toggles ? snapshot.toggles : {};
+          state.combobox = snapshot && snapshot.combobox ? snapshot.combobox : {};
+          state.status = snapshot && snapshot.status ? snapshot.status : {};
+          state.tabs = {};
+
+          var tabs = snapshot && snapshot.tabs ? snapshot.tabs : {};
+          for (var key in tabs) {
+            if (hasOwn(tabs, key)) {
+              var tab = tabs[key] || {};
               state.tabs[key] = {
-                key,
-                label: payload.label || key,
-                closable: Boolean(payload.closable),
-                logs: [],
+                key: key,
+                label: tab.label || key,
+                closable: !!tab.closable,
+                logs: isArray(tab.logs) ? tab.logs.slice(0) : []
               };
             }
-            break;
           }
-          case 'tab_removed':
-            if (payload.key && state.tabs[payload.key]) {
-              delete state.tabs[payload.key];
-              state.selectedTabs.delete(payload.key);
+
+          var events = snapshot && snapshot.events ? snapshot.events : [];
+          for (var i = 0; i < events.length; i += 1) {
+            var evt = events[i];
+            if (evt && evt.id && evt.id > state.lastEvent) {
+              state.lastEvent = evt.id;
             }
-            break;
-          case 'log': {
-            const key = payload.key;
-            if (!state.tabs[key]) {
-              state.tabs[key] = { key, label: key, closable: true, logs: [] };
-            }
-            const tab = state.tabs[key];
-            tab.logs.push({ html: payload.html || '', origin: payload.origin || 'container' });
-            if (tab.logs.length > 400) {
-              tab.logs.splice(0, tab.logs.length - 400);
-            }
-            break;
+            applyEvent(evt);
           }
-          case 'combobox':
-            state.combobox[payload.name] = {
-              options: payload.options || [],
-              current: payload.current || null,
-            };
-            break;
-          case 'status':
-            state.status[payload.key] = payload.value;
-            break;
-          case 'shutdown':
-            document.getElementById('status-line').textContent = 'Application shutting down';
-            break;
-          default:
-            break;
-        }
-      }
 
-      function renderAll() {
-        renderToggles();
-        renderCombos();
-        renderTabSelector();
-        renderLogs();
-        updateStatusLine();
-      }
-
-      function renderToggles() {
-        const grid = document.getElementById('toggle-grid');
-        grid.innerHTML = '';
-        Object.keys(state.toggles).forEach((key) => {
-          const data = state.toggles[key];
-          const btn = document.createElement('button');
-          btn.className = 'toggle-button';
-          btn.dataset.toggle = key;
-          btn.textContent = data.text || key;
-          btn.disabled = !data.enabled;
-          const colors = data.colors || {};
-          btn.style.backgroundColor = colors.bg || '#343a40';
-          btn.style.color = colors.fg || '#fff';
-          btn.style.padding = `${colors.padding || 6}px`;
-          btn.addEventListener('click', () => handleAction(`toggle_${key}`));
-          grid.appendChild(btn);
-        });
-      }
-
-      function renderCombos() {
-        const wrapper = document.getElementById('combo-group');
-        wrapper.innerHTML = '';
-        Object.entries(state.combobox).forEach(([name, data]) => {
-          const label = document.createElement('label');
-          label.textContent = `${name} configuration`;
-          const select = document.createElement('select');
-          (data.options || []).forEach((opt) => {
-            const option = document.createElement('option');
-            option.value = opt;
-            option.textContent = opt;
-            if (opt === data.current) {
-              option.selected = true;
-            }
-            select.appendChild(option);
-          });
-          select.addEventListener('change', () => handleAction('set_combo', { name, value: select.value }));
-          label.appendChild(select);
-          wrapper.appendChild(label);
-        });
-      }
-
-      function renderTabSelector() {
-        const container = document.getElementById('tab-selector');
-        container.innerHTML = '';
-        Object.values(state.tabs)
-          .sort((a, b) => a.label.localeCompare(b.label))
-          .forEach((tab) => {
-            const label = document.createElement('label');
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.checked = state.selectedTabs.has(tab.key);
-            cb.addEventListener('change', () => {
-              if (cb.checked) {
-                state.selectedTabs.add(tab.key);
-              } else {
-                state.selectedTabs.delete(tab.key);
+          if (!state.selectedTabs.length) {
+            var count = 0;
+            for (var tabKey in state.tabs) {
+              if (hasOwn(state.tabs, tabKey)) {
+                addSelectedTab(tabKey);
+                count += 1;
+                if (count >= 3) {
+                  break;
+                }
               }
-              renderLogs();
-            });
-            const span = document.createElement('span');
+            }
+          }
+
+          renderAll();
+        }
+
+        function applyEvent(evt) {
+          if (!evt || !evt.type) {
+            return;
+          }
+          var payload = evt.payload || {};
+          switch (evt.type) {
+            case 'toggle':
+              if (payload.key) {
+                state.toggles[payload.key] = payload;
+              }
+              break;
+            case 'tab':
+              if (!payload.key) {
+                break;
+              }
+              if (hasOwn(state.tabs, payload.key)) {
+                var existing = state.tabs[payload.key];
+                existing.label = payload.label || existing.label;
+                existing.closable = !!payload.closable;
+              } else {
+                state.tabs[payload.key] = {
+                  key: payload.key,
+                  label: payload.label || payload.key,
+                  closable: !!payload.closable,
+                  logs: []
+                };
+              }
+              break;
+            case 'tab_removed':
+              if (payload.key && hasOwn(state.tabs, payload.key)) {
+                delete state.tabs[payload.key];
+                removeSelectedTab(payload.key);
+              }
+              break;
+            case 'log':
+              if (!payload.key) {
+                break;
+              }
+              if (!hasOwn(state.tabs, payload.key)) {
+                state.tabs[payload.key] = {
+                  key: payload.key,
+                  label: payload.key,
+                  closable: true,
+                  logs: []
+                };
+              }
+              var tab = state.tabs[payload.key];
+              tab.logs.push({
+                html: payload.html || '',
+                origin: payload.origin || 'container'
+              });
+              if (tab.logs.length > 400) {
+                tab.logs.splice(0, tab.logs.length - 400);
+              }
+              break;
+            case 'combobox':
+              if (payload.name) {
+                state.combobox[payload.name] = {
+                  options: payload.options || [],
+                  current: payload.current || null
+                };
+              }
+              break;
+            case 'status':
+              if (payload.key) {
+                state.status[payload.key] = payload.value;
+              }
+              break;
+            case 'shutdown':
+              setStatus('Application shutting down');
+              break;
+            default:
+              break;
+          }
+        }
+
+        function renderAll() {
+          renderToggles();
+          renderCombos();
+          renderTabSelector();
+          renderLogs();
+          updateStatusLine();
+        }
+
+        function renderToggles() {
+          var grid = document.getElementById('toggle-grid');
+          if (!grid) {
+            return;
+          }
+          grid.innerHTML = '';
+          for (var key in state.toggles) {
+            if (!hasOwn(state.toggles, key)) {
+              continue;
+            }
+            var data = state.toggles[key] || {};
+            var btn = document.createElement('button');
+            btn.className = 'toggle-button';
+            btn.setAttribute('data-toggle', key);
+            btn.textContent = data.text || key;
+            btn.disabled = !data.enabled;
+            var colors = data.colors || {};
+            var padding = colors.padding !== undefined && colors.padding !== null ? colors.padding : 6;
+            btn.style.backgroundColor = colors.bg || '#343a40';
+            btn.style.color = colors.fg || '#fff';
+            btn.style.padding = String(padding) + 'px';
+            btn.onclick = (function (toggleKey) {
+              return function () {
+                handleAction('toggle_' + toggleKey);
+              };
+            })(key);
+            grid.appendChild(btn);
+          }
+        }
+
+        function renderCombos() {
+          var wrapper = document.getElementById('combo-group');
+          if (!wrapper) {
+            return;
+          }
+          wrapper.innerHTML = '';
+          for (var name in state.combobox) {
+            if (!hasOwn(state.combobox, name)) {
+              continue;
+            }
+            var data = state.combobox[name] || {};
+            var label = document.createElement('label');
+            label.textContent = name + ' configuration';
+            var select = document.createElement('select');
+            var options = data.options || [];
+            for (var i = 0; i < options.length; i += 1) {
+              var opt = document.createElement('option');
+              opt.value = options[i];
+              opt.textContent = options[i];
+              if (options[i] === data.current) {
+                opt.selected = true;
+              }
+              select.appendChild(opt);
+            }
+            select.onchange = (function (comboName, element) {
+              return function () {
+                handleAction('set_combo', { name: comboName, value: element.value });
+              };
+            })(name, select);
+            label.appendChild(select);
+            wrapper.appendChild(label);
+          }
+        }
+
+        function renderTabSelector() {
+          var container = document.getElementById('tab-selector');
+          if (!container) {
+            return;
+          }
+          container.innerHTML = '';
+          var tabsArray = [];
+          for (var key in state.tabs) {
+            if (hasOwn(state.tabs, key)) {
+              tabsArray.push(state.tabs[key]);
+            }
+          }
+          tabsArray.sort(function (a, b) {
+            var aLabel = a.label || '';
+            var bLabel = b.label || '';
+            if (aLabel < bLabel) return -1;
+            if (aLabel > bLabel) return 1;
+            return 0;
+          });
+          for (var i = 0; i < tabsArray.length; i += 1) {
+            var tab = tabsArray[i];
+            var label = document.createElement('label');
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = hasSelectedTab(tab.key);
+            cb.onchange = (function (tabKey, checkbox) {
+              return function () {
+                if (checkbox.checked) {
+                  addSelectedTab(tabKey);
+                } else {
+                  removeSelectedTab(tabKey);
+                }
+                renderLogs();
+              };
+            })(tab.key, cb);
+            var span = document.createElement('span');
             span.textContent = tab.label;
             label.appendChild(cb);
             label.appendChild(span);
             container.appendChild(label);
-          });
-      }
+          }
+        }
 
-      function renderLogs() {
-        const container = document.getElementById('log-container');
-        container.className = `columns-${state.layoutColumns}`;
-        container.innerHTML = '';
-        Array.from(state.selectedTabs)
-          .filter((key) => state.tabs[key])
-          .forEach((key) => {
-            const tab = state.tabs[key];
-            const card = document.createElement('div');
+        function renderLogs() {
+          var container = document.getElementById('log-container');
+          if (!container) {
+            return;
+          }
+          filterSelectedTabs();
+          container.className = 'columns-' + state.layoutColumns;
+          container.innerHTML = '';
+          for (var i = 0; i < state.selectedTabs.length; i += 1) {
+            var key = state.selectedTabs[i];
+            if (!hasOwn(state.tabs, key)) {
+              continue;
+            }
+            var tab = state.tabs[key];
+            var card = document.createElement('div');
             card.className = 'log-card';
-            const header = document.createElement('header');
-            const title = document.createElement('h3');
+            var header = document.createElement('header');
+            var title = document.createElement('h3');
             title.textContent = tab.label;
             header.appendChild(title);
-            const pop = document.createElement('button');
+            var pop = document.createElement('button');
             pop.textContent = 'Pop-out';
-            pop.addEventListener('click', () => openTabWindow(tab));
+            pop.onclick = (function (tabData) {
+              return function () {
+                openTabWindow(tabData);
+              };
+            })(tab);
             header.appendChild(pop);
             card.appendChild(header);
-            const scroller = document.createElement('div');
+            var scroller = document.createElement('div');
             scroller.className = 'log-scroll';
-            scroller.innerHTML = tab.logs
-              .map((line) => `<div class=\"log-line origin-${line.origin || 'container'}\">${line.html || ''}</div>`)
-              .join('');
+            var html = '';
+            for (var j = 0; j < tab.logs.length; j += 1) {
+              var line = tab.logs[j] || {};
+              html += '<div class="log-line origin-' + safeOriginClass(line.origin) + '">' + (line.html || '') + '</div>';
+            }
+            scroller.innerHTML = html;
             scroller.scrollTop = scroller.scrollHeight;
             card.appendChild(scroller);
             container.appendChild(card);
+          }
+        }
+
+        function openTabWindow(tab) {
+          var popup = window.open('', '_tab_' + tab.key, 'width=720,height=560');
+          if (!popup) {
+            return;
+          }
+          var label = escapeHtml(tab.label || tab.key);
+          var doc = popup.document;
+          doc.open();
+          doc.write('<!DOCTYPE html><html><head><meta charset="utf-8" />' +
+            '<title>' + label + '</title>' +
+            '<style>body{background:#0b0b10;color:#f8f9fa;font-family:Menlo,monospace;padding:1rem;}' +
+            'h1{font-size:1.2rem;margin-bottom:0.75rem;}div{line-height:1.35rem;font-size:0.9rem;}' +
+            '.log-line{margin-bottom:0.25rem;}.origin-gui{color:#50fa7b;}</style></head><body>' +
+            '<h1>' + label + '</h1><div id="log-view"></div></body></html>');
+          doc.close();
+          var target = doc.getElementById('log-view');
+          if (target) {
+            var html = '';
+            for (var i = 0; i < tab.logs.length; i += 1) {
+              var line = tab.logs[i] || {};
+              html += '<div class="log-line ' + safeOriginClass(line.origin) + '">' + (line.html || '') + '</div>';
+            }
+            target.innerHTML = html;
+          }
+        }
+
+        function updateStatusLine() {
+          var pieces = [];
+          if (hasOwn(state.toggles, 'sim')) {
+            var simState = state.toggles.sim && state.toggles.sim.state ? state.toggles.sim.state : 'unknown';
+            pieces.push('Sim: ' + simState);
+          }
+          if (hasOwn(state.toggles, 'roscore')) {
+            var roscoreState = state.toggles.roscore && state.toggles.roscore.state ? state.toggles.roscore.state : 'unknown';
+            pieces.push('Roscore: ' + roscoreState);
+          }
+          if (pieces.length) {
+            setStatus(pieces.join(' • '));
+          } else {
+            setStatus('Ready');
+          }
+        }
+
+        function handleAction(action, payload) {
+          if (payload === undefined) {
+            payload = {};
+          }
+          postJSON('/api/action', { action: action, payload: payload }).catch(function (err) {
+            if (window.console && console.error) {
+              console.error(err);
+            }
+            window.alert(err && err.message ? err.message : 'Action failed');
           });
-      }
-
-      function openTabWindow(tab) {
-        const popup = window.open('', `_tab_${tab.key}`, 'width=720,height=560');
-        if (!popup) return;
-        popup.document.write(`<!DOCTYPE html><html><head><title>${tab.label}</title>` +
-          '<meta charset="utf-8" /><style>body{background:#0b0b10;color:#f8f9fa;font-family:Menlo,monospace;padding:1rem;}h1{font-size:1.2rem;margin-bottom:0.75rem;}div{line-height:1.35rem;font-size:0.9rem;} .log-line{margin-bottom:0.25rem;} .origin-gui{color:#50fa7b;}</style></head><body>' +
-          `<h1>${tab.label}</h1><div id="log-view"></div></body></html>`);
-        popup.document.close();
-        const target = popup.document.getElementById('log-view');
-        target.innerHTML = tab.logs
-          .map((line) => `<div class="log-line ${line.origin ? `origin-${line.origin}` : ''}">${line.html || ''}</div>`)
-          .join('');
-      }
-
-      function updateStatusLine() {
-        const element = document.getElementById('status-line');
-        if (!element) return;
-        const pieces = [];
-        if (state.toggles.sim) {
-          pieces.push(`Sim: ${state.toggles.sim.state || 'unknown'}`);
         }
-        if (state.toggles.roscore) {
-          pieces.push(`Roscore: ${state.toggles.roscore.state || 'unknown'}`);
+
+        function pollEvents() {
+          getJSON('/api/events?since=' + state.lastEvent)
+            .then(function (events) {
+              if (!isArray(events)) {
+                return;
+              }
+              for (var i = 0; i < events.length; i += 1) {
+                var evt = events[i];
+                if (evt && evt.id && evt.id > state.lastEvent) {
+                  state.lastEvent = evt.id;
+                }
+                applyEvent(evt);
+              }
+              renderLogs();
+              renderToggles();
+              updateStatusLine();
+            })
+            .catch(function (err) {
+              if (window.console && console.warn) {
+                console.warn('Polling failed', err);
+              }
+              setStatus('Connection lost – retrying…');
+            });
         }
-        element.textContent = pieces.length ? pieces.join(' • ') : 'Ready';
-      }
 
-      async function handleAction(action, payload = {}) {
-        try {
-          await postJSON('/api/action', { action, payload });
-        } catch (err) {
-          console.error(err);
-          alert(err.message || 'Action failed');
+        function initLayoutControls() {
+          var layoutSelect = document.getElementById('layout-select');
+          if (layoutSelect) {
+            layoutSelect.value = String(state.layoutColumns);
+            layoutSelect.onchange = function () {
+              var value = parseInt(layoutSelect.value, 10);
+              state.layoutColumns = isNaN(value) ? 1 : value;
+              renderLogs();
+            };
+          }
+          var actionsRow = document.getElementById('actions-row');
+          if (actionsRow) {
+            var buttons = actionsRow.getElementsByTagName('button');
+            for (var i = 0; i < buttons.length; i += 1) {
+              var btn = buttons[i];
+              btn.onclick = (function (actionName) {
+                return function () {
+                  handleAction(actionName);
+                };
+              })(btn.getAttribute('data-action'));
+            }
+          }
         }
-      }
 
-      async function pollEvents() {
-        try {
-          const events = await getJSON(`/api/events?since=${state.lastEvent}`);
-          events.forEach((evt) => {
-            state.lastEvent = Math.max(state.lastEvent, evt.id || 0);
-            applyEvent(evt);
-          });
-          renderLogs();
-          renderToggles();
-          updateStatusLine();
-        } catch (err) {
-          console.warn('Polling failed', err);
-          document.getElementById('status-line').textContent = 'Connection lost – retrying…';
+        function bootstrap() {
+          setStatus('Connecting...');
+          getJSON('/api/snapshot')
+            .then(function (snapshot) {
+              applySnapshot(snapshot || {});
+              initLayoutControls();
+              setStatus('Connected');
+              pollEvents();
+              setInterval(pollEvents, 1200);
+            })
+            .catch(function (err) {
+              if (window.console && console.error) {
+                console.error(err);
+              }
+              setStatus('Failed to connect');
+            });
         }
-      }
 
-      function initLayoutControls() {
-        const layoutSelect = document.getElementById('layout-select');
-        layoutSelect.value = String(state.layoutColumns);
-        layoutSelect.addEventListener('change', () => {
-          state.layoutColumns = Number(layoutSelect.value) || 1;
-          renderLogs();
-        });
-        document.querySelectorAll('#actions-row button').forEach((btn) => {
-          btn.addEventListener('click', () => handleAction(btn.dataset.action));
-        });
-      }
-
-      async function bootstrap() {
-        try {
-          const snapshot = await getJSON('/api/snapshot');
-          applySnapshot(snapshot);
-          initLayoutControls();
-          document.getElementById('status-line').textContent = 'Connected';
-          setInterval(pollEvents, 1200);
-        } catch (err) {
-          console.error(err);
-          document.getElementById('status-line').textContent = 'Failed to connect';
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+          setTimeout(bootstrap, 0);
+        } else {
+          window.addEventListener('DOMContentLoaded', bootstrap);
         }
-      }
-
-      bootstrap();
+      })();
     </script>
   </body>
 </html>
