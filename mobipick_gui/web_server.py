@@ -43,7 +43,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        self.send_header('X-Accel-Buffering', 'no')
         self.send_header('Connection', 'close')
         self.end_headers()
         if body:
@@ -82,9 +85,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if parsed.path == '/api/events':
             query = parse_qs(parsed.query)
             since = int(query.get('since', ['0'])[0] or 0)
-            events = self.bridge.events_since(since)
-            logger.debug('Returning %d events since id %d', len(events), since)
-            self._json(events)
+            payload = self.bridge.events_since(since)
+            events = payload.get('events', []) if isinstance(payload, dict) else []
+            logger.debug('Returning %d events since id %d (next_since=%s)', len(events), since, payload.get('next_since') if isinstance(payload, dict) else 'n/a')
+            self._json(payload)
             return
         if parsed.path == '/api/health':
             self._json({'ok': True, 'ts': time.time()})

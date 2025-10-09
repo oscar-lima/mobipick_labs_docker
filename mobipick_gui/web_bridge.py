@@ -55,8 +55,8 @@ class NullWebBridge:
             "combobox": {},
         }
 
-    def events_since(self, *_: Any, **__: Any) -> list[dict[str, Any]]:  # pragma: no cover - trivial
-        return []
+    def events_since(self, *_: Any, **__: Any) -> dict[str, Any]:  # pragma: no cover - trivial
+        return {"events": [], "next_since": 0}
 
     def invoke(self, callback: Callable[[], Any]) -> None:  # pragma: no cover - trivial
         callback()
@@ -147,15 +147,24 @@ class WebBridge(QObject):
                 "status": dict(self._status),
             }
 
-    def events_since(self, event_id: int) -> list[dict[str, Any]]:
+    def events_since(self, event_id: int) -> dict[str, Any]:
         with self._lock:
             if not self._events:
-                return []
+                logger.debug('events_since(%d) -> empty (no events recorded)', event_id)
+                return {"events": [], "next_since": max(0, event_id)}
+
             if event_id <= 0:
-                return list(self._events)
-            events = [evt for evt in self._events if evt["id"] > event_id]
-        logger.debug('events_since(%d) -> %d events', event_id, len(events))
-        return events
+                events = list(self._events)
+            else:
+                events = [evt for evt in self._events if evt["id"] > event_id]
+
+            if events:
+                next_since = events[-1]["id"]
+            else:
+                next_since = max(event_id, self._events[-1]["id"])
+
+        logger.debug('events_since(%d) -> %d events (next_since=%d)', event_id, len(events), next_since)
+        return {"events": events, "next_since": next_since}
 
     # ------------------------------------------------------------------
     # GUI -> web updates

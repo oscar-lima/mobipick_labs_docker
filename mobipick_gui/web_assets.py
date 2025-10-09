@@ -891,10 +891,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
         function pollEvents() {
           getJSON('/api/events?since=' + state.lastEvent)
-            .then(function (events) {
-              if (!isArray(events)) {
-                return;
+            .then(function (payload) {
+              var events = [];
+              var nextSince = null;
+              if (isArray(payload)) {
+                events = payload;
+                if (events.length) {
+                  var last = events[events.length - 1];
+                  if (last && last.id !== undefined && last.id !== null) {
+                    nextSince = parseInt(last.id, 10);
+                  }
+                }
+              } else if (payload && typeof payload === 'object') {
+                if (isArray(payload.events)) {
+                  events = payload.events;
+                }
+                if (hasOwn(payload, 'next_since')) {
+                  var parsed = parseInt(payload.next_since, 10);
+                  if (!isNaN(parsed)) {
+                    nextSince = parsed;
+                  }
+                }
               }
+
               for (var i = 0; i < events.length; i += 1) {
                 var evt = events[i];
                 if (evt && evt.id && evt.id > state.lastEvent) {
@@ -902,6 +921,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 }
                 applyEvent(evt);
               }
+
+              if (nextSince !== null && !isNaN(nextSince)) {
+                if (state.lastEvent < nextSince) {
+                  state.lastEvent = nextSince;
+                }
+              }
+
               renderLogs();
               renderToggles();
               updateStatusLine();
