@@ -24,7 +24,6 @@ Instead of starting all docker container and run one terminator for logging you 
 - Always start Roscore first—other toggles do it automatically but the master must stay up for everything else.
 - User scripts live in `./scripts/`; edit locally, then use the Scripts toggle to run/stop them inside `mobipick_cmd`.
 - The Sim/Tables/RViz/RQt toggles send output to their named tabs; use `Update Status` if you need to resync button state with running containers.
-- To serve the same controls in a browser start the GUI with `python gui.py --web`. The terminal prints the URL (e.g. `http://127.0.0.1:8080`); open it to access the web dashboard. Use the layout selector to arrange embedded process logs (one, two, or three columns), toggle individual tabs on/off, or pop any tab into a separate window while the backend continues to manage the ROS processes.
 
 ## Shutdown
 To stop everything call `docker compose down`.
