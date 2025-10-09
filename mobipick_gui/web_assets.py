@@ -257,6 +257,165 @@ INDEX_HTML = r"""<!DOCTYPE html>
       (function () {
         'use strict';
 
+        if (typeof window.Promise !== 'function') {
+          function SimplePromise(executor) {
+            if (!(this instanceof SimplePromise)) {
+              throw new TypeError('Promise must be called with new');
+            }
+            if (typeof executor !== 'function') {
+              throw new TypeError('Promise executor must be a function');
+            }
+
+            var self = this;
+            self._state = 'pending';
+            self._value = undefined;
+            self._handlers = [];
+
+            function schedule(fn) {
+              window.setTimeout(fn, 0);
+            }
+
+            function handle(handler) {
+              var cb = self._state === 'fulfilled' ? handler.onFulfilled : handler.onRejected;
+              if (typeof cb !== 'function') {
+                if (self._state === 'fulfilled') {
+                  handler.resolve(self._value);
+                } else {
+                  handler.reject(self._value);
+                }
+                return;
+              }
+              try {
+                var result = cb(self._value);
+                handler.resolve(result);
+              } catch (err) {
+                handler.reject(err);
+              }
+            }
+
+            function runHandlers() {
+              if (self._handlers.length === 0) {
+                return;
+              }
+              var handlers = self._handlers.slice(0);
+              self._handlers.length = 0;
+              for (var i = 0; i < handlers.length; i += 1) {
+                handle(handlers[i]);
+              }
+            }
+
+            function addHandler(handler) {
+              if (self._state === 'pending') {
+                self._handlers.push(handler);
+              } else {
+                schedule(function () {
+                  handle(handler);
+                });
+              }
+            }
+
+            function settle(state, value) {
+              if (self._state !== 'pending') {
+                return;
+              }
+              self._state = state;
+              self._value = value;
+              schedule(runHandlers);
+            }
+
+            function fulfill(value) {
+              settle('fulfilled', value);
+            }
+
+            function reject(reason) {
+              settle('rejected', reason);
+            }
+
+            function resolve(value) {
+              if (value === self) {
+                reject(new TypeError('Cannot resolve promise with itself'));
+                return;
+              }
+              if (value && (typeof value === 'object' || typeof value === 'function')) {
+                var then;
+                try {
+                  then = value.then;
+                } catch (err) {
+                  reject(err);
+                  return;
+                }
+                if (typeof then === 'function') {
+                  var called = false;
+                  try {
+                    then.call(
+                      value,
+                      function (val) {
+                        if (called) {
+                          return;
+                        }
+                        called = true;
+                        resolve(val);
+                      },
+                      function (err) {
+                        if (called) {
+                          return;
+                        }
+                        called = true;
+                        reject(err);
+                      }
+                    );
+                    return;
+                  } catch (err2) {
+                    if (!called) {
+                      reject(err2);
+                    }
+                    return;
+                  }
+                }
+              }
+              fulfill(value);
+            }
+
+            this._addHandler = addHandler;
+
+            try {
+              executor(resolve, reject);
+            } catch (err3) {
+              reject(err3);
+            }
+          }
+
+          SimplePromise.prototype.then = function (onFulfilled, onRejected) {
+            var self = this;
+            return new SimplePromise(function (resolve, reject) {
+              self._addHandler({
+                onFulfilled: onFulfilled,
+                onRejected: onRejected,
+                resolve: resolve,
+                reject: reject
+              });
+            });
+          };
+
+          SimplePromise.prototype.catch = function (onRejected) {
+            return this.then(undefined, onRejected);
+          };
+
+          SimplePromise.resolve = function (value) {
+            return new SimplePromise(function (resolve) {
+              resolve(value);
+            });
+          };
+
+          SimplePromise.reject = function (reason) {
+            return new SimplePromise(function (_resolve, reject) {
+              reject(reason);
+            });
+          };
+
+          window.Promise = SimplePromise;
+        }
+
         var state = {
           toggles: {},
           tabs: {},
