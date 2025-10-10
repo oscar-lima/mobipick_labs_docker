@@ -304,6 +304,9 @@ class MainWindow(QMainWindow):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
 
+    def _compose_base_args(self) -> list[str]:
+        return ['compose', '--project-directory', str(self._project_root)]
+
     def _compose_env_args(self) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
@@ -320,13 +323,18 @@ class MainWindow(QMainWindow):
         return env_args
 
     def _compose_exec_args(self, *exec_args: str, tty: bool = False) -> list[str]:
-        args = ['compose', 'exec']
+        args = self._compose_base_args()
+        args.append('exec')
         if not tty:
             args.append('-T')
         args.extend(self._compose_env_args())
         args.append(self._workspace_service)
         args.extend(exec_args)
         return args
+
+    def _compose_cmd(self, *compose_args: str) -> list[str]:
+        base = self._compose_base_args()
+        return ['docker', *base, *compose_args]
 
     def _query_workspace_container_id(self) -> str | None:
         service = getattr(self, '_workspace_service', None)
@@ -336,7 +344,7 @@ class MainWindow(QMainWindow):
         run_kwargs = self._prepare_run_env(run_kwargs)
         try:
             cp = subprocess.run(
-                ['docker', 'compose', 'ps', '-q', service],
+                self._compose_cmd('ps', '-q', service),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,
@@ -360,7 +368,7 @@ class MainWindow(QMainWindow):
         self._append_gui_html(log_key, '<i>Ensuring workspace container is running...</i>')
         try:
             cp = self._sp_run(
-                ['docker', 'compose', 'up', '-d', self._workspace_service],
+                self._compose_cmd('up', '-d', self._workspace_service),
                 log_key=log_key,
                 log_stdout=False,
                 log_stderr=True,
@@ -420,10 +428,17 @@ class MainWindow(QMainWindow):
         if world:
             env['MOBIPICK_WORLD'] = world
         run_kwargs['env'] = env
+        run_kwargs.setdefault('cwd', str(self._project_root))
         return run_kwargs
 
     def _safe_docker_cmd(self, *docker_args: str, suppress_output: bool = True) -> list[str]:
-        shell_cmd = shlex.join(['docker', *docker_args])
+        docker_parts = ['docker']
+        if docker_args[:1] == ('compose',):
+            docker_parts.extend(self._compose_base_args())
+            docker_parts.extend(docker_args[1:])
+        else:
+            docker_parts.extend(docker_args)
+        shell_cmd = shlex.join(docker_parts)
         if suppress_output:
             shell_cmd += ' >/dev/null 2>&1'
         shell_cmd += ' || true'
