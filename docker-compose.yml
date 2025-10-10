@@ -1,4 +1,35 @@
 services:
+  workspace:
+    image: ${MOBIPICK_IMAGE:-brean/mobipick_labs:noetic}
+    hostname: workspace
+    build:
+      context: ./
+      dockerfile: ./docker/mobipick_labs/Dockerfile
+      args:
+        ROS_DISTRO: noetic
+    working_dir: /root/catkin_ws/
+    entrypoint: /entrypoint.sh
+    command: ["sleep", "infinity"]
+    environment:
+      - DISPLAY
+      - "ROS_DISTRO=noetic"
+      - "GAZEBO_MASTER_URI=http://mobipick:12345"
+      - "ROS_MASTER_URI=http://mobipick:11311"
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - XDG_RUNTIME_DIR
+      - __NV_PRIME_RENDER_OFFLOAD
+      - __GLX_VENDOR_LIBRARY_NAME
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - /run/user:/run/user:ro
+      - catkin_ws_shared:/root/catkin_ws
+      - ./scripts:/root/scripts:rw
+    expose:
+      - 11311
+      - 12345
+    privileged: true
+
   mobipick:
     hostname: mobipick
     # gazebo server
@@ -22,6 +53,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for Gazebo GUI
       - /run/user:/run/user:ro  # for Gazebo GUI
+      - catkin_ws_shared:/root/catkin_ws
       - ./scripts:/root/scripts:rw
     expose:
       - 11311 # roscore
@@ -47,6 +79,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for gazebo gui
       - /run/user:/run/user:ro  # for Gazebo GUI
+      - catkin_ws_shared:/root/catkin_ws
       - ./scripts:/root/scripts:rw
     privileged: true  # for Gazebo GUI
 
@@ -54,3 +87,6 @@ networks:
   default:
     name: mobipick
     external: true
+
+volumes:
+  catkin_ws_shared:

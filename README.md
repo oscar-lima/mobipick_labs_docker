@@ -9,6 +9,13 @@ If you just want to run the simulation without planning and without rviz `mobipi
 
 To run custom ROS commands just prefix them with `./cmd.bash`. This starts a new docker container with your command connected to the ROScore of the mobipick-container instance.
 
+## Shared workspace
+
+- `docker-compose.yml` provides a persistent `workspace` service (`command: sleep infinity`) that keeps the catkin workspace alive between commands.
+- The workspace, `mobipick`, and `mobipick_cmd` containers mount the same named volume at `/root/catkin_ws`, so GUI-launched builds, `mobipick.bash`, and `cmd.bash` all share the same source tree.
+- The GUI and helper scripts now call `docker compose exec workspace ...` so every action runs inside that long-lived container; you can do the same from a terminal for ad-hoc commands.
+- Stop the session with `docker compose stop workspace` (or run `./clean.bash`) when you are finished to free resources.
+
 ## Example Run
 
 ### Option 1: run each command separately
@@ -20,10 +27,10 @@ Instead of starting all docker container and run one terminator for logging you 
 1. (optional) it could also be helpful to run another terminal inside a docker container to call ROS commands and test stuff, just run `./cmd.bash bash` to start one.
 
 ### Option 2: GUI Quick Start
-- Launch the GUI with `python gui.py`; the top row toggles (Roscore, Sim, Tables Demo, RViz, RQt, Scripts) manage single instances.
+- Launch the GUI with `python gui.py`; the top row toggles (Roscore, Sim, Tables Demo, RViz, RQt, Scripts) now exec into the `workspace` container so everything shares the same filesystem state.
 - Always start Roscore first—other toggles do it automatically but the master must stay up for everything else.
-- User scripts live in `./scripts/`; edit locally, then use the Scripts toggle to run/stop them inside `mobipick_cmd`.
-- The Sim/Tables/RViz/RQt toggles send output to their named tabs; use `Update Status` if you need to resync button state with running containers.
+- User scripts live in `./scripts/`; edit locally, then use the Scripts toggle to run/stop them inside the shared workspace container.
+- The Sim/Tables/RViz/RQt toggles send output to their named tabs; use `Update Status` if you need to resync button state with running commands.
 
 ## Shutdown
-To stop everything call `docker compose down`.
+To stop everything call `docker compose stop workspace` (and optionally `docker compose down` for the other services) or simply run `./clean.bash`.
