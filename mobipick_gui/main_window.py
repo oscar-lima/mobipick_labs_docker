@@ -4,13 +4,16 @@ import html
 import os
 import re
 import shlex
+import signal
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections import deque
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Match, Optional
 
 from PyQt5.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
@@ -19,19 +22,22 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QFileDialog,
-    QSizePolicy,
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
@@ -46,6 +52,99 @@ def trigger_sigint():
     global _SIGINT_TRIGGERED
     _SIGINT_TRIGGERED = True
 
+
+class ContainerPathDialog(QDialog):
+    """Dialog to browse and select a directory inside a container."""
+
+    def __init__(
+        self,
+        parent: 'MainWindow',
+        *,
+        container: str,
+        start_path: str,
+        listdir_callback: Callable[[str, str], list[tuple[str, bool]]],
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Select Container Directory')
+        self._container = container
+        self._listdir_callback = listdir_callback
+        self._current_path = start_path or '/'
+        self.selected_path: str | None = None
+
+        layout = QVBoxLayout(self)
+
+        path_row = QHBoxLayout()
+        path_row.addWidget(QLabel('Current path:'))
+        self.path_display = QLineEdit(self._current_path)
+        self.path_display.setReadOnly(True)
+        path_row.addWidget(self.path_display)
+        layout.addLayout(path_row)
+
+        self.entry_list = QListWidget()
+        self.entry_list.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self.entry_list)
+
+        controls = QHBoxLayout()
+        self.up_button = QPushButton('Up')
+        self.up_button.clicked.connect(self._go_up)
+        controls.addWidget(self.up_button)
+        controls.addStretch(1)
+        self.select_button = QPushButton('Select')
+        self.select_button.clicked.connect(self.accept)
+        controls.addWidget(self.select_button)
+        cancel_button = QPushButton('Cancel')
+        cancel_button.clicked.connect(self.reject)
+        controls.addWidget(cancel_button)
+        layout.addLayout(controls)
+
+        self._refresh_entries()
+
+    def _refresh_entries(self):
+        try:
+            entries = self._listdir_callback(self._container, self._current_path)
+        except Exception as exc:  # pragma: no cover - GUI path
+            QMessageBox.critical(
+                self,
+                'Container Browser',
+                f'Failed to list {html.escape(self._current_path)}:\n{html.escape(str(exc))}',
+            )
+            entries = []
+        self.entry_list.clear()
+        for name, is_dir in entries:
+            item = QListWidgetItem(name + ('/' if is_dir else ''))
+            item.setData(Qt.UserRole, is_dir)
+            self.entry_list.addItem(item)
+        self.path_display.setText(self._current_path)
+
+    def _go_up(self):
+        path = PurePosixPath(self._current_path)
+        parent = str(path.parent)
+        if not parent:
+            parent = '/'
+        if self._current_path == '/':
+            return
+        self._current_path = parent or '/'
+        self._refresh_entries()
+
+    def _on_item_double_clicked(self, item: QListWidgetItem):
+        if not item.data(Qt.UserRole):
+            return
+        name = item.text().rstrip('/')
+        if not name:
+            return
+        if name == '..':
+            self._go_up()
+            return
+        if self._current_path == '/':
+            new_path = f'/{name}'
+        else:
+            new_path = f"{self._current_path.rstrip('/')}/{name}"
+        self._current_path = new_path
+        self._refresh_entries()
+
+    def accept(self):
+        self.selected_path = self._current_path
+        super().accept()
 
 class MainWindow(QMainWindow):
     def __init__(self, verbosity: int = 1):
@@ -77,10 +176,13 @@ class MainWindow(QMainWindow):
         self._scripts_dir = PROJECT_ROOT / 'scripts'
         self._script_choices: list[str] = []
         self._script_active_tab_key: str | None = None
-        self._workspace_service = 'workspace'
-        self._workspace_hostname = 'workspace'
-        self._workspace_container_id: str | None = None
-        self._roscore_container_name = self._workspace_hostname
+        self._master_enabled = False
+        self._master_container_choices: list[str] = []
+        self._master_container_name: str | None = None
+        self._master_sync_path = '/root/catkin_ws'
+        self._tab_snapshots: dict[str, str] = {}
+        self._terminal_snapshot_path: str | None = None
+        self._roscore_container_name = 'mobipick-roscore'
         self._roscore_running_cached = False
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
@@ -102,7 +204,7 @@ class MainWindow(QMainWindow):
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
 
         # sim state
-        self._sim_container_name = self._workspace_hostname
+        self._sim_container_name = 'mobipick-run'
         self._sim_xhost_granted = False
         self._sim_running_cached = False  # event driven sim state
 
@@ -201,6 +303,35 @@ class MainWindow(QMainWindow):
         self.run_script_button.clicked.connect(self._on_run_script_clicked)
         scripts_row.addWidget(self.run_script_button)
         root.addLayout(scripts_row)
+
+        master_row = QHBoxLayout()
+        self.master_checkbox = QCheckBox('Enable master mirroring')
+        self.master_checkbox.toggled.connect(self._on_master_toggle)
+        master_row.addWidget(self.master_checkbox)
+
+        master_row.addWidget(QLabel('Container:'))
+        self.master_container_combo = QComboBox()
+        self.master_container_combo.setEnabled(False)
+        self.master_container_combo.currentIndexChanged.connect(self._on_master_container_changed)
+        master_row.addWidget(self.master_container_combo)
+
+        self.master_refresh_button = QPushButton('Refresh')
+        self.master_refresh_button.setEnabled(False)
+        self.master_refresh_button.clicked.connect(self._on_master_refresh_clicked)
+        master_row.addWidget(self.master_refresh_button)
+
+        master_row.addWidget(QLabel('Path:'))
+        self.master_path_input = QLineEdit(self._master_sync_path)
+        self.master_path_input.setEnabled(False)
+        self.master_path_input.editingFinished.connect(self._on_master_path_edit_finished)
+        master_row.addWidget(self.master_path_input)
+
+        self.master_browse_button = QPushButton('Browse...')
+        self.master_browse_button.setEnabled(False)
+        self.master_browse_button.clicked.connect(self._on_master_browse_clicked)
+        master_row.addWidget(self.master_browse_button)
+
+        root.addLayout(master_row)
 
         self.run_script_button.setEnabled(False)
         self.script_combo.setEnabled(False)
@@ -304,9 +435,6 @@ class MainWindow(QMainWindow):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
 
-    def _compose_base_args(self) -> list[str]:
-        return ['compose', '--project-directory', str(self._project_root)]
-
     def _compose_env_args(self) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
@@ -322,82 +450,239 @@ class MainWindow(QMainWindow):
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
 
-    def _compose_exec_args(self, *exec_args: str, tty: bool = False) -> list[str]:
-        args = self._compose_base_args()
-        args.append('exec')
-        if not tty:
-            args.append('-T')
-        args.extend(self._compose_env_args())
-        args.append(self._workspace_service)
-        args.extend(exec_args)
-        return args
+    # ---------- Master container helpers ----------
 
-    def _compose_cmd(self, *compose_args: str) -> list[str]:
-        base = self._compose_base_args()
-        return ['docker', *base, *compose_args]
+    def _on_master_toggle(self, checked: bool):
+        self._master_enabled = bool(checked)
+        self.master_container_combo.setEnabled(checked)
+        self.master_refresh_button.setEnabled(checked)
+        self.master_path_input.setEnabled(checked)
+        self.master_browse_button.setEnabled(checked)
+        if checked:
+            self._refresh_master_containers()
+        else:
+            self._master_container_name = None
 
-    def _query_workspace_container_id(self) -> str | None:
-        service = getattr(self, '_workspace_service', None)
-        if not service:
-            return None
-        run_kwargs: dict = {}
-        run_kwargs = self._prepare_run_env(run_kwargs)
+    def _refresh_master_containers(self):
+        names = self._collect_running_container_names()
+        self._master_container_choices = names
+        self.master_container_combo.blockSignals(True)
+        self.master_container_combo.clear()
+        if names:
+            self.master_container_combo.addItems(names)
+            selected = self._master_container_name or ''
+            if selected in names:
+                self.master_container_combo.setCurrentIndex(names.index(selected))
+            else:
+                self.master_container_combo.setCurrentIndex(0)
+                self._master_container_name = names[0]
+            self.master_container_combo.setEnabled(True)
+        else:
+            self.master_container_combo.addItem('No running containers')
+            self.master_container_combo.setCurrentIndex(0)
+            self.master_container_combo.setEnabled(False)
+            self._master_container_name = None
+        self.master_container_combo.blockSignals(False)
+
+    def _collect_running_container_names(self) -> list[str]:
         try:
             cp = subprocess.run(
-                self._compose_cmd('ps', '-q', service),
+                ['docker', 'ps', '--format', '{{.Names}}'],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 check=False,
                 text=True,
-                **run_kwargs,
             )
         except Exception as exc:
-            self._console_log(1, f'Failed to query workspace container: {exc}')
-            return None
-        container_id = (cp.stdout or '').strip().splitlines()
-        if container_id:
-            return container_id[0]
-        return None
+            self._console_log(1, f'Failed to query running containers: {exc}')
+            return []
+        if cp.returncode != 0:
+            err = (cp.stderr or '').strip()
+            if err:
+                self._console_log(1, f'docker ps error: {err}')
+            return []
+        return [line.strip() for line in (cp.stdout or '').splitlines() if line.strip()]
 
-    def _ensure_workspace_running(self, log_key: str = 'log') -> bool:
-        container_id = self._query_workspace_container_id()
-        if container_id:
-            self._workspace_container_id = container_id
-            return True
+    def _on_master_container_changed(self):
+        if not self._master_enabled:
+            return
+        text = self.master_container_combo.currentText().strip()
+        if text and text != 'No running containers':
+            self._master_container_name = text
 
-        self._append_gui_html(log_key, '<i>Ensuring workspace container is running...</i>')
+    def _on_master_refresh_clicked(self):
+        self._refresh_master_containers()
+
+    def _normalize_container_path(self, path: str) -> str:
+        path = (path or '').strip()
+        if not path:
+            return '/'
+        if not path.startswith('/'):
+            path = '/' + path
+        # collapse duplicate slashes
+        while '//' in path:
+            path = path.replace('//', '/')
+        return path or '/'
+
+    def _on_master_path_edit_finished(self):
+        text = self.master_path_input.text()
+        normalized = self._normalize_container_path(text)
+        self._master_sync_path = normalized
+        self.master_path_input.setText(normalized)
+
+    def _on_master_browse_clicked(self):
+        if not self._master_enabled:
+            return
+        container = self._master_container_name
+        if not container:
+            QMessageBox.information(self, 'Master Container', 'No master container is selected.')
+            return
+        dialog = ContainerPathDialog(
+            self,
+            container=container,
+            start_path=self._master_sync_path,
+            listdir_callback=self._list_container_directory,
+        )
+        if dialog.exec_() == QDialog.Accepted and dialog.selected_path:
+            normalized = self._normalize_container_path(dialog.selected_path)
+            self._master_sync_path = normalized
+            self.master_path_input.setText(normalized)
+
+    def _list_container_directory(self, container: str, path: str) -> list[tuple[str, bool]]:
+        normalized = self._normalize_container_path(path)
+        cmd = [
+            'docker',
+            'exec',
+            container,
+            'bash',
+            '-lc',
+            f'cd {shlex.quote(normalized)} && ls -a -p',
+        ]
         try:
-            cp = self._sp_run(
-                self._compose_cmd('up', '-d', self._workspace_service),
-                log_key=log_key,
-                log_stdout=False,
-                log_stderr=True,
+            cp = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 check=False,
+                text=True,
             )
         except Exception as exc:
-            self._append_gui_html(log_key, f'<i>Failed to start workspace container: {html.escape(str(exc))}</i>')
-            self._console_log(1, f'Failed to start workspace container: {exc}')
-            return False
+            raise RuntimeError(f'Failed to list directory: {exc}') from exc
+        if cp.returncode != 0:
+            err = (cp.stderr or '').strip() or 'unknown error'
+            raise RuntimeError(err)
+        entries: list[tuple[str, bool]] = []
+        if normalized != '/':
+            entries.append(('..', True))
+        for line in (cp.stdout or '').splitlines():
+            entry = line.strip()
+            if not entry or entry == '.':
+                continue
+            is_dir = entry.endswith('/')
+            name = entry.rstrip('/')
+            if name == '..':
+                continue
+            entries.append((name, is_dir))
+        entries.sort(key=lambda item: (not item[1], item[0].lower()))
+        return entries
 
-        if getattr(cp, 'returncode', 0) != 0:
-            self._append_gui_html(log_key, '<i>docker compose up -d workspace failed.</i>')
-            return False
+    def _master_mode_active(self) -> bool:
+        return bool(self._master_enabled and self._master_container_name and self._master_sync_path)
 
-        container_id = self._query_workspace_container_id()
-        if container_id:
-            self._workspace_container_id = container_id
-            return True
+    def _create_master_snapshot(self, *, log_key: str) -> str | None:
+        if not self._master_mode_active():
+            return None
+        container = self._master_container_name or ''
+        sync_path = self._normalize_container_path(self._master_sync_path)
+        tmpdir = tempfile.mkdtemp(prefix='mobipick_mirror_')
+        src_path = sync_path.rstrip('/') if sync_path != '/' else sync_path
+        if sync_path == '/':
+            src = f'{container}:{src_path}'
+        else:
+            src = f'{container}:{src_path}/.'
+        cmd = ['docker', 'cp', src, tmpdir]
+        try:
+            cp = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+            )
+        except Exception as exc:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            message = f'Failed to mirror {sync_path} from {container}: {exc}'
+            self._append_gui_html(log_key, f'<i>{html.escape(message)}</i>')
+            self._console_log(1, message)
+            return None
+        if cp.returncode != 0:
+            message = (cp.stderr or '').strip() or 'unknown error'
+            self._append_gui_html(
+                log_key,
+                f'<i>Failed to mirror {html.escape(sync_path)} from {html.escape(container)}: {html.escape(message)}</i>',
+            )
+            self._console_log(1, f'docker cp error: {message}')
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return None
+        info = f'Created snapshot of {sync_path} from {container}.'
+        self._append_gui_html(log_key, f'<i>{html.escape(info)}</i>')
+        return tmpdir
 
-        self._append_gui_html(log_key, '<i>Workspace container not detected after start attempt.</i>')
-        return False
+    def _prepare_master_volume_args(
+        self,
+        args: list[str],
+        *,
+        service: str,
+        log_key: str,
+    ) -> tuple[list[str], str | None]:
+        if not self._master_mode_active():
+            return args, None
+        snapshot = self._create_master_snapshot(log_key=log_key)
+        if not snapshot:
+            return args, None
+        target_path = self._normalize_container_path(self._master_sync_path)
+        new_args = list(args)
+        try:
+            index = new_args.index(service)
+        except ValueError:
+            index = len(new_args)
+        new_args[index:index] = ['--volume', f'{snapshot}:{target_path}']
+        container = self._master_container_name or ''
+        message = f'Mirroring {target_path} from {container} into container session.'
+        self._append_gui_html(log_key, f'<i>{html.escape(message)}</i>')
+        return new_args, snapshot
+
+    def _inject_master_volume(
+        self,
+        args: list[str],
+        *,
+        service: str,
+        tab: ProcessTab | None,
+        log_key: str,
+    ) -> list[str]:
+        new_args, snapshot = self._prepare_master_volume_args(args, service=service, log_key=log_key)
+        if snapshot and tab:
+            self._tab_snapshots[tab.key] = snapshot
+        return new_args
+
+    def _cleanup_snapshot_for_tab(self, key: str):
+        path = self._tab_snapshots.pop(key, None)
+        if path:
+            shutil.rmtree(path, ignore_errors=True)
+
+    def _cleanup_terminal_snapshot(self):
+        if self._terminal_snapshot_path:
+            shutil.rmtree(self._terminal_snapshot_path, ignore_errors=True)
+            self._terminal_snapshot_path = None
 
     def _current_master_uri(self) -> str:
-        host = getattr(self, '_workspace_hostname', 'mobipick')
+        if getattr(self, '_roscore_stopping', False):
+            return 'http://mobipick:11311'
         if getattr(self, '_roscore_running_cached', False):
-            return f'http://{host}:11311'
+            return f'http://{self._roscore_container_name}:11311'
         if 'roscore' in self.tasks and self.tasks['roscore'].is_running():
             self._roscore_running_cached = True
-            return f'http://{host}:11311'
+            return f'http://{self._roscore_container_name}:11311'
         return 'http://mobipick:11311'
 
     def _build_process_environment(self, extra: Optional[dict[str, str]] = None) -> QProcessEnvironment:
@@ -428,17 +713,10 @@ class MainWindow(QMainWindow):
         if world:
             env['MOBIPICK_WORLD'] = world
         run_kwargs['env'] = env
-        run_kwargs.setdefault('cwd', str(self._project_root))
         return run_kwargs
 
     def _safe_docker_cmd(self, *docker_args: str, suppress_output: bool = True) -> list[str]:
-        docker_parts = ['docker']
-        if docker_args[:1] == ('compose',):
-            docker_parts.extend(self._compose_base_args())
-            docker_parts.extend(docker_args[1:])
-        else:
-            docker_parts.extend(docker_args)
-        shell_cmd = shlex.join(docker_parts)
+        shell_cmd = shlex.join(['docker', *docker_args])
         if suppress_output:
             shell_cmd += ' >/dev/null 2>&1'
         shell_cmd += ' || true'
@@ -765,11 +1043,17 @@ class MainWindow(QMainWindow):
 
             key_target = self._select_custom_tab_key()
             tab = self.tasks[key_target]
-            if not self._ensure_workspace_running(log_key=tab.key):
-                self.set_script_visual('red', 'Run Script', bool(self._script_choices))
-                return
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             inner = f"python3 /root/scripts/{self._sh_quote(script)}"
-            args = self._compose_exec_args('bash', '-lc', self._wrap_line_buffered(inner))
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+            ]
+            args = self._inject_master_volume(args, service='mobipick_cmd', tab=tab, log_key=tab.key)
             tab.start_program('docker', args)
             self._script_active_tab_key = key_target
             self.set_script_visual('green', 'Stop Script', True)
@@ -1258,10 +1542,22 @@ class MainWindow(QMainWindow):
             self._sim_xhost_granted = False
 
     def is_roscore_running(self) -> bool:
-        return self.tasks['roscore'].is_running() or bool(self._roscore_running_cached)
+        try:
+            cp = self._sp_run(['docker', 'ps', '--format', '{{.Names}}'],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
+            names = set(cp.stdout.strip().splitlines())
+            return (self._roscore_container_name in names) or self.tasks['roscore'].is_running()
+        except Exception:
+            return self.tasks['roscore'].is_running()
 
     def is_sim_running(self) -> bool:
-        return self.tasks['sim'].is_running() or bool(self._sim_running_cached)
+        try:
+            cp = self._sp_run(['docker', 'ps', '--format', '{{.Names}}'],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
+            names = set(cp.stdout.strip().splitlines())
+            return (self._sim_container_name in names) or self.tasks['sim'].is_running()
+        except Exception:
+            return False
 
     def toggle_roscore(self):
         if self._roscore_stopping:
@@ -1324,16 +1620,21 @@ class MainWindow(QMainWindow):
         self.set_roscore_visual('yellow', 'Starting Roscore...', False)
         self._ensure_network(log_key='roscore')
         tab = self._ensure_tab('roscore', 'Roscore', closable=False)
-        if not self._ensure_workspace_running(log_key=tab.key):
-            self._roscore_running_cached = False
-            self.set_roscore_visual('red', 'Start Roscore', enabled=True)
-            return
+        tab.container_name = self._roscore_container_name
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
         inner = 'roscore'
         self._roscore_running_cached = True
         self._roscore_stopping = False
         self._roscore_last_start_ts = time.monotonic()
         self.set_roscore_visual('green', 'Stop Roscore', enabled=True)
-        args = self._compose_exec_args('bash', '-lc', self._wrap_line_buffered(inner))
+        args = [
+            'compose', 'run', '--rm', '--name', self._roscore_container_name,
+            '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
+            *self._compose_env_args(),
+            'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+        ]
+        args = self._inject_master_volume(args, service='mobipick_cmd', tab=tab, log_key=tab.key)
         tab.start_program('docker', args)
         self._focus_tab('roscore')
 
@@ -1400,9 +1701,8 @@ class MainWindow(QMainWindow):
 
         def _cleanup():
             commands: list[list[str]] = []
-            if self._roscore_container_name and self._roscore_container_name != self._workspace_service:
-                commands += self._docker_stop_if_exists(self._roscore_container_name, tab, exec_id=tab.exec_id)
-            commands += self._stop_all_related(tab, exclude={self._workspace_service})
+            commands += self._docker_stop_if_exists(self._roscore_container_name, tab, exec_id=tab.exec_id)
+            commands += self._stop_all_related(tab, exclude={self._roscore_container_name})
 
             clean_exists = self._cleanup_script_available()
             if not self._cleanup_done and clean_exists:
@@ -1455,17 +1755,17 @@ class MainWindow(QMainWindow):
             self._grant_x()
 
             tab = self._ensure_tab('sim', 'Sim', closable=False)
-            if not self._ensure_workspace_running(log_key=tab.key):
-                self._sim_running_cached = False
-                self.set_toggle_visual('red', 'Start Sim', enabled=True)
-                return
+            tab.container_name = self._sim_container_name  # ensure sim tab is addressable
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
 
-            inner = (
-                f'roslaunch tables_demo_bringup demo_sim.launch '
-                f'world_config:={self._sh_quote(world)}'
-            )
-
-            args = self._compose_exec_args('bash', '-lc', self._wrap_line_buffered(inner))
+            args = [
+                'compose', 'run', '--rm', '--name', self._sim_container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
+                *self._compose_env_args(),
+                'mobipick'
+            ]
+            args = self._inject_master_volume(args, service='mobipick', tab=tab, log_key=tab.key)
             tab.start_program('docker', args)
             self._focus_tab('sim')
 
@@ -1497,11 +1797,8 @@ class MainWindow(QMainWindow):
             return
         if tab:
             label = name or (exec_id or 'container')
-            if name == self._workspace_service and not exec_id:
-                self._append_gui_html(tab.key, f'<i>docker compose stop {html.escape(label)}</i>')
-            else:
-                self._append_gui_html(tab.key, f'<i>docker kill -s INT {html.escape(label)}</i>')
-                self._append_gui_html(tab.key, f'<i>docker stop {html.escape(label)}</i>')
+            self._append_gui_html(tab.key, f'<i>docker kill -s INT {html.escape(label)}</i>')
+            self._append_gui_html(tab.key, f'<i>docker stop {html.escape(label)}</i>')
         self._run_command_sequence(
             commands,
             log_key=(tab.key if tab else 'log'),
@@ -1529,8 +1826,7 @@ class MainWindow(QMainWindow):
             commands: list[list[str]] = []
 
             # stop sim container if present
-            if self._sim_container_name and self._sim_container_name != self._workspace_service:
-                commands += self._docker_stop_if_exists(self._sim_container_name, tab, exec_id=tab.exec_id)
+            commands += self._docker_stop_if_exists(self._sim_container_name, tab, exec_id=tab.exec_id)
 
             def _finalize():
                 self._revoke_x()
@@ -1555,10 +1851,6 @@ class MainWindow(QMainWindow):
         include_int: bool = True,
     ) -> list[list[str]]:
         commands: list[list[str]] = []
-        if name and name == self._workspace_service and not exec_id:
-            commands.append(self._safe_docker_cmd('compose', 'stop', self._workspace_service))
-            self._workspace_container_id = None
-            return commands
         ids = self._resolve_container_ids(name=name, exec_id=exec_id)
         if not ids:
             return commands
@@ -1579,9 +1871,7 @@ class MainWindow(QMainWindow):
 
     def _collect_exit_commands(self) -> list[list[str]]:
         commands: list[list[str]] = []
-        if self._sim_container_name and self._sim_container_name != self._workspace_service:
-            commands += self._collect_container_commands(self._sim_container_name, log_key='log')
-        commands += self._collect_container_commands(self._workspace_service, log_key='log', include_int=False)
+        commands += self._collect_container_commands(self._sim_container_name, log_key='log')
         commands += self._stop_all_related(None)
         if not self._cleanup_done and self._cleanup_script_available():
             commands.append([SCRIPT_CLEAN])
@@ -1608,8 +1898,6 @@ class MainWindow(QMainWindow):
                     continue
                 cid, cname, cimage, clabels, cstatus = parts
                 if exclude and cname in exclude:
-                    continue
-                if 'com.docker.compose.service=' + self._workspace_service in clabels:
                     continue
                 hay_lower = f'{cname} {cimage} {clabels}'.lower()
                 if patterns_lower and not any(p in hay_lower for p in patterns_lower):
@@ -1661,25 +1949,49 @@ class MainWindow(QMainWindow):
 
     # optionally keep a manual refresh helper for rare external changes
     def update_sim_status_from_poll(self, force=False):
-        self._update_roscore_status()
-        self._update_terminal_status()
+        names: set[str] | None = None
+        if force:
+            try:
+                cp = self._sp_run(['docker', 'ps', '--format', '{{.Names}}'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
+                names = set(cp.stdout.strip().splitlines())
+            except Exception:
+                names = None
+
+        self._update_roscore_status(force=force, names=names)
+        self._update_terminal_status(force=force, names=names)
 
         if self._killing:
             self.set_toggle_visual('yellow', 'Shutting down...', enabled=False)
             return
 
-        running = self.tasks['sim'].is_running()
-        self._sim_running_cached = running
+        running = self._sim_running_cached or self.tasks['sim'].is_running()
+        if force:
+            if names is not None:
+                running = (self._sim_container_name in names) or self.tasks['sim'].is_running()
+            self._sim_running_cached = running
+        else:
+            self._sim_running_cached = running
 
         self.set_toggle_visual('green', 'Stop Sim', True) if self._sim_running_cached \
             else self.set_toggle_visual('red', 'Start Sim', True)
 
-    def _update_roscore_status(self):
+    def _update_roscore_status(self, *, force: bool = False, names: set[str] | None = None):
         if self._roscore_stopping:
             self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
             return
 
-        running = self.tasks['roscore'].is_running()
+        running = self._roscore_running_cached or self.tasks['roscore'].is_running()
+        if force:
+            if names is None:
+                try:
+                    cp = self._sp_run(['docker', 'ps', '--format', '{{.Names}}'],
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
+                    names = set(cp.stdout.strip().splitlines())
+                except Exception:
+                    names = None
+            if names is not None:
+                running = (self._roscore_container_name in names) or self.tasks['roscore'].is_running()
 
         if running:
             self._roscore_running_cached = True
@@ -1688,12 +2000,15 @@ class MainWindow(QMainWindow):
             self._roscore_running_cached = False
             self.set_roscore_visual('red', 'Start Roscore', enabled=True)
 
-    def _update_terminal_status(self):
+    def _update_terminal_status(self, *, force: bool = False, names: set[str] | None = None):
         if self._terminal_stopping:
             self.set_terminal_visual('yellow', 'Closing Terminal...', False)
             return
 
         running = self._terminal_proc is not None and self._terminal_proc.state() != QProcess.NotRunning
+
+        if force and names is not None and self._terminal_container_name:
+            running = running or (self._terminal_container_name in names)
 
         self._terminal_running_cached = running
 
@@ -1792,11 +2107,17 @@ class MainWindow(QMainWindow):
         def _start_tables():
             self._log_info('launching tables demo container')
             tab = self._ensure_tab('tables', 'Tables Demo', closable=False)
-            if not self._ensure_workspace_running(log_key=tab.key):
-                self.set_tables_visual('red', 'Run Tables Demo', True)
-                return
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             inner = 'rosrun tables_demo_planning tables_demo_node.py'
-            args = self._compose_exec_args('bash', '-lc', self._wrap_line_buffered(inner))
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+            ]
+            args = self._inject_master_volume(args, service='mobipick_cmd', tab=tab, log_key=tab.key)
             tab.start_program('docker', args)
             self.set_tables_visual('green', 'Stop Tables Demo', True)
             self._focus_tab('tables')
@@ -1834,11 +2155,17 @@ class MainWindow(QMainWindow):
             self._log_info('starting RViz viewer')
             self._grant_x()
             tab = self._ensure_tab('rviz', 'RViz', closable=False)
-            if not self._ensure_workspace_running(log_key=tab.key):
-                self.set_rviz_visual('red', 'Start RViz', True)
-                return
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
-            args = self._compose_exec_args('bash', '-lc', self._wrap_line_buffered(rviz_cmd))
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
+            ]
+            args = self._inject_master_volume(args, service='mobipick_cmd', tab=tab, log_key=tab.key)
             tab.start_program('docker', args)
             self.set_rviz_visual('green', 'Stop RViz', True)
             self._focus_tab('rviz')
@@ -1877,11 +2204,17 @@ class MainWindow(QMainWindow):
             self._log_info(f'starting rqt tables demo for {world}')
             self._grant_x()
             tab = self._ensure_tab('rqt', 'RQt Tables', closable=False)
-            if not self._ensure_workspace_running(log_key=tab.key):
-                self.set_rqt_visual('red', 'Start RQt Tables', True)
-                return
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
-            args = self._compose_exec_args('bash', '-lc', self._wrap_line_buffered(cmd))
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
+            ]
+            args = self._inject_master_volume(args, service='mobipick_cmd', tab=tab, log_key=tab.key)
             tab.start_program('docker', args)
             self.set_rqt_visual('green', 'Stop RQt Tables', True)
             self._focus_tab('rqt')
@@ -1914,13 +2247,25 @@ class MainWindow(QMainWindow):
 
         def _start_terminal():
             self._ensure_network(log_key='log')
-            if not self._ensure_workspace_running(log_key='log'):
-                self._append_gui_html('log', '<i>Workspace container is unavailable.</i>')
-                self.set_terminal_visual('red', 'Open Terminal', True)
-                return
+            exec_id = uuid.uuid4().hex
+            container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
 
-            exec_args = self._compose_exec_args('bash', tty=True)
-            command_parts = ['docker', *exec_args]
+            compose_args = [
+                'compose', 'run', '--rm', '--name', container_name,
+                '--label', f'mobipick.exec={exec_id}',
+                '--label', 'mobipick.role=terminal',
+                '--label', 'mobipick.tab=terminal',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash'
+            ]
+            compose_args, snapshot = self._prepare_master_volume_args(
+                compose_args,
+                service='mobipick_cmd',
+                log_key='log',
+            )
+            if snapshot:
+                self._terminal_snapshot_path = snapshot
+            command_parts = ['docker', *compose_args]
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
             if not launcher:
@@ -1930,8 +2275,8 @@ class MainWindow(QMainWindow):
 
             self._terminal_stopping = False
             self._terminal_running_cached = True
-            self._terminal_container_name = self._workspace_container_id or self._workspace_service
-            self._terminal_exec_id = None
+            self._terminal_container_name = container_name
+            self._terminal_exec_id = exec_id
 
             proc = QProcess(self)
             proc.setProcessEnvironment(self._build_process_environment())
@@ -1952,7 +2297,7 @@ class MainWindow(QMainWindow):
                 self.set_terminal_visual('red', 'Open Terminal', True)
                 return
 
-            self._start_terminal_stream(self._terminal_container_name, self._terminal_exec_id or '')
+            self._start_terminal_stream(container_name, exec_id)
             self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
             self.set_terminal_visual('green', 'Close Terminal', True)
 
@@ -1962,7 +2307,7 @@ class MainWindow(QMainWindow):
         if self._terminal_stopping and self._terminal_proc is None:
             self._finalize_terminal_stop()
             return
-        if not self._terminal_is_active():
+        if not self._terminal_is_active() and not self._terminal_container_name:
             self._terminal_running_cached = False
             self.set_terminal_visual('red', 'Open Terminal', True)
             return
@@ -2030,8 +2375,30 @@ class MainWindow(QMainWindow):
         self.set_terminal_visual('red', 'Open Terminal', True)
 
     def _cleanup_terminal_container(self):
+        name = self._terminal_container_name
+        if not name:
+            return
         self._terminal_container_name = None
         self._terminal_exec_id = None
+        self._cleanup_terminal_snapshot()
+        try:
+            subprocess.run(
+                ['docker', 'stop', name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ['docker', 'rm', name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
 
     def _start_terminal_stream(self, container_name: str, exec_id: str):
         self._terminal_stream_counter += 1
@@ -2041,12 +2408,14 @@ class MainWindow(QMainWindow):
         tab.output.clear()
         tab.container_name = container_name
         tab.exec_id = exec_id
-        message = 'Interactive terminal attached to workspace container.'
-        if container_name:
-            message = (
-                f'Interactive terminal attached to {html.escape(container_name)}.'
-            )
-        self._append_gui_html(key, f'<i>{message}</i>')
+        quoted = self._sh_quote(container_name)
+        script = (
+            f'until docker container inspect {quoted} >/dev/null 2>&1; do '
+            'sleep 0.2; '
+            'done; '
+            f'docker logs -f --tail 0 {quoted}'
+        )
+        tab.start_program('bash', ['-lc', script])
         self._focus_tab(key)
         self._terminal_stream_tab_key = key
 
@@ -2061,11 +2430,17 @@ class MainWindow(QMainWindow):
             key_target = self._select_custom_tab_key()
 
             tab = self.tasks[key_target]
-            if not self._ensure_workspace_running(log_key=tab.key):
-                self._append_gui_html(tab.key, '<i>Workspace container is unavailable.</i>')
-                return
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             wrapped = self._wrap_line_buffered(text)
-            args = self._compose_exec_args('bash', '-lc', wrapped)
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash', '-lc', wrapped
+            ]
+            args = self._inject_master_volume(args, service='mobipick_cmd', tab=tab, log_key=tab.key)
             tab.start_program('docker', args)
             self._focus_tab(key_target)
             self._update_stop_custom_enabled()
@@ -2344,6 +2719,7 @@ class MainWindow(QMainWindow):
             self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
             self.tasks[key].container_name = None
             self.tasks[key].exec_id = None
+        self._cleanup_snapshot_for_tab(key)
         if key == 'roscore':
             self._roscore_running_cached = False
             if self._roscore_stopping:
