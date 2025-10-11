@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
         self._terminal_stopping = False
         self._terminal_stream_tab_key: str | None = None
         self._terminal_stream_counter = 0
+        self._terminal_owns_container = False
         self._project_root = PROJECT_ROOT
         self._toggle_states: dict[str, str] = {}
         self._last_log_origin: dict[str, str] = {}
@@ -338,6 +339,9 @@ class MainWindow(QMainWindow):
         self.run_script_button.setEnabled(False)
         self.script_combo.setEnabled(False)
 
+        # ensure master controls reflect disabled state by default
+        self._on_master_toggle(False)
+
         self._ensure_scripts_dir()
 
         self._update_related_patterns()
@@ -454,6 +458,9 @@ class MainWindow(QMainWindow):
 
     # ---------- Master container helpers ----------
 
+    def _is_master_requested(self) -> bool:
+        return bool(self.master_checkbox.isChecked())
+
     def _on_master_toggle(self, checked: bool):
         self._master_enabled = bool(checked)
         self.master_container_combo.setEnabled(checked)
@@ -464,6 +471,11 @@ class MainWindow(QMainWindow):
             self._refresh_master_containers()
         else:
             self._master_container_name = None
+            self.master_container_combo.blockSignals(True)
+            self.master_container_combo.clear()
+            self.master_container_combo.addItem('Master mirroring disabled')
+            self.master_container_combo.setCurrentIndex(0)
+            self.master_container_combo.blockSignals(False)
 
     def _refresh_master_containers(self):
         names = self._collect_running_container_names()
@@ -506,7 +518,7 @@ class MainWindow(QMainWindow):
         return [line.strip() for line in (cp.stdout or '').splitlines() if line.strip()]
 
     def _on_master_container_changed(self):
-        if not self._master_enabled:
+        if not self._is_master_requested():
             return
         text = self.master_container_combo.currentText().strip()
         if text and text != 'No running containers':
@@ -533,7 +545,7 @@ class MainWindow(QMainWindow):
         self.master_path_input.setText(normalized)
 
     def _on_master_browse_clicked(self):
-        if not self._master_enabled:
+        if not self._is_master_requested():
             return
         container = self._master_container_name
         if not container:
@@ -588,8 +600,37 @@ class MainWindow(QMainWindow):
         entries.sort(key=lambda item: (not item[1], item[0].lower()))
         return entries
 
+    def _master_container_running(self) -> bool:
+        container = self._master_container_name
+        if not container:
+            return False
+        try:
+            cp = subprocess.run(
+                ['docker', 'inspect', '-f', '{{.State.Running}}', container],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+            )
+        except Exception as exc:
+            self._console_log(1, f'Failed to inspect container {container}: {exc}')
+            return False
+        if cp.returncode != 0:
+            err = (cp.stderr or '').strip()
+            if err:
+                self._console_log(1, f'docker inspect error for {container}: {err}')
+            return False
+        return (cp.stdout or '').strip().lower() == 'true'
+
     def _master_mode_active(self) -> bool:
-        return bool(self._master_enabled and self._master_container_name and self._master_sync_path)
+        if not self._is_master_requested():
+            return False
+        if not self._master_container_name or not self._master_sync_path:
+            return False
+        if not self._master_container_running():
+            self._console_log(1, 'Master mirroring disabled because the selected container is not running.')
+            return False
+        return True
 
     def _create_master_snapshot(self, *, log_key: str) -> str | None:
         if not self._master_mode_active():
@@ -2249,25 +2290,41 @@ class MainWindow(QMainWindow):
 
         def _start_terminal():
             self._ensure_network(log_key='log')
-            exec_id = uuid.uuid4().hex
-            container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
+            snapshot = None
+            stream_container: str | None = None
+            owns_container = False
 
-            compose_args = [
-                'compose', 'run', '--rm', '--name', container_name,
-                '--label', f'mobipick.exec={exec_id}',
-                '--label', 'mobipick.role=terminal',
-                '--label', 'mobipick.tab=terminal',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash'
-            ]
-            compose_args, snapshot = self._prepare_master_volume_args(
-                compose_args,
-                service='mobipick_cmd',
-                log_key='log',
-            )
-            if snapshot:
-                self._terminal_snapshot_path = snapshot
-            command_parts = ['docker', *compose_args]
+            if self._master_mode_active():
+                master_container = self._master_container_name or ''
+                if not master_container:
+                    self._append_gui_html('log', '<i>Master mirroring is enabled but no container is selected.</i>')
+                    self.set_terminal_visual('red', 'Open Terminal', True)
+                    return
+                command_parts = ['docker', 'exec', '-it', master_container, 'bash']
+                container_name = None
+                exec_id = None
+                self._append_gui_html('log', f'<i>Opening terminal inside master container {html.escape(master_container)}.</i>')
+            else:
+                exec_id = uuid.uuid4().hex
+                container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
+                compose_args = [
+                    'compose', 'run', '--rm', '--name', container_name,
+                    '--label', f'mobipick.exec={exec_id}',
+                    '--label', 'mobipick.role=terminal',
+                    '--label', 'mobipick.tab=terminal',
+                    *self._compose_env_args(),
+                    'mobipick_cmd', 'bash'
+                ]
+                compose_args, snapshot = self._prepare_master_volume_args(
+                    compose_args,
+                    service='mobipick_cmd',
+                    log_key='log',
+                )
+                if snapshot:
+                    self._terminal_snapshot_path = snapshot
+                command_parts = ['docker', *compose_args]
+                stream_container = container_name
+                owns_container = True
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
             if not launcher:
@@ -2277,8 +2334,14 @@ class MainWindow(QMainWindow):
 
             self._terminal_stopping = False
             self._terminal_running_cached = True
-            self._terminal_container_name = container_name
-            self._terminal_exec_id = exec_id
+            self._terminal_owns_container = owns_container
+            if owns_container:
+                self._terminal_container_name = container_name
+                self._terminal_exec_id = exec_id
+            else:
+                self._terminal_container_name = None
+                self._terminal_exec_id = None
+                self._cleanup_terminal_snapshot()
 
             proc = QProcess(self)
             proc.setProcessEnvironment(self._build_process_environment())
@@ -2299,7 +2362,8 @@ class MainWindow(QMainWindow):
                 self.set_terminal_visual('red', 'Open Terminal', True)
                 return
 
-            self._start_terminal_stream(container_name, exec_id)
+            if stream_container and exec_id:
+                self._start_terminal_stream(stream_container, exec_id)
             self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
             self.set_terminal_visual('green', 'Close Terminal', True)
 
@@ -2378,10 +2442,15 @@ class MainWindow(QMainWindow):
 
     def _cleanup_terminal_container(self):
         name = self._terminal_container_name
-        if not name:
+        if not name or not self._terminal_owns_container:
+            self._terminal_container_name = None
+            self._terminal_exec_id = None
+            self._terminal_owns_container = False
+            self._cleanup_terminal_snapshot()
             return
         self._terminal_container_name = None
         self._terminal_exec_id = None
+        self._terminal_owns_container = False
         self._cleanup_terminal_snapshot()
         try:
             subprocess.run(

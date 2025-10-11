@@ -28,6 +28,17 @@ network_in_use() {
   [ "${count:-0}" -gt 0 ]
 }
 
+volume_exists() {
+  docker volume inspect "$1" >/dev/null 2>&1
+}
+
+volume_in_use() {
+  local vol="$1"
+  local attached
+  attached="$(docker ps -q --filter "volume=${vol}")"
+  [ -n "$attached" ]
+}
+
 log "starting docker cleanup"
 
 # check docker cli presence
@@ -85,6 +96,26 @@ if network_exists "$NET_NAME"; then
   fi
 else
   log "network \"$NET_NAME\" does not exist, doing nothing because there is nothing to remove"
+fi
+
+VOL_NAME="catkin_ws_shared"
+log "evaluating removal of volume \"$VOL_NAME\""
+
+if volume_exists "$VOL_NAME"; then
+  if volume_in_use "$VOL_NAME"; then
+    log "volume \"$VOL_NAME\" is still in use, skipping removal"
+  else
+    log "volume \"$VOL_NAME\" is unused, executing \"docker volume rm $VOL_NAME\""
+    docker volume rm "$VOL_NAME"
+    rc=$?
+    if [ $rc -eq 0 ]; then
+      log "volume \"$VOL_NAME\" removed successfully"
+    else
+      log "failed to remove volume \"$VOL_NAME\" with exit code $rc"
+    fi
+  fi
+else
+  log "volume \"$VOL_NAME\" does not exist, nothing to remove"
 fi
 
 log "docker cleanup complete"
