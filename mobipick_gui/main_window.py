@@ -459,7 +459,7 @@ class MainWindow(QMainWindow):
     # ---------- Master container helpers ----------
 
     def _is_master_requested(self) -> bool:
-        return bool(self.master_checkbox.isChecked())
+        return bool(self._master_enabled)
 
     def _on_master_toggle(self, checked: bool):
         self._master_enabled = bool(checked)
