@@ -729,28 +729,6 @@ class MainWindow(QMainWindow):
         tab = self._prepare_tab_for_origin('log', 'gui')
         tab.output.enqueue(True, '<br>')
 
-    def _log_environment_block(self, tab_key: str, env: QProcessEnvironment | None):
-        if not self._log_environment_enabled or env is None:
-            return
-        try:
-            keys = sorted(str(env_key) for env_key in env.keys())
-        except Exception:
-            return
-
-        lines = ['-------- ENV --------']
-        for env_key in keys:
-            value = env.value(env_key)
-            lines.append(f'{env_key}={value}')
-        lines.append('------------ END ENV ---------')
-
-        for line in lines:
-            escaped = html.escape(line)
-            self._append_gui_html(tab_key, escaped, color=self._env_log_color)
-            self._console_log(3, line)
-
-        self._append_gui_html(tab_key, '&nbsp;', color=self._env_log_color)
-        self._append_gui_html(tab_key, '&nbsp;', color=self._env_log_color)
-
     def _log_event(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')
         line = f'[{ts}] event: {details}'
@@ -1892,10 +1870,44 @@ class MainWindow(QMainWindow):
         return False
 
     # ---------- Buffering control helper ----------
+    def _env_color_rgb(self) -> tuple[int, int, int]:
+        color = (self._env_log_color or '').strip()
+        if color.startswith('#'):
+            color = color[1:]
+        match = re.fullmatch(r'(?i)[0-9a-f]{6}', color)
+        if match:
+            hex_value = match.group(0)
+            return tuple(int(hex_value[i : i + 2], 16) for i in (0, 2, 4))
+        match = re.fullmatch(r'(?i)[0-9a-f]{3}', color)
+        if match:
+            hex_value = match.group(0)
+            return tuple(int(ch * 2, 16) for ch in hex_value)
+        return (210, 180, 140)
+
+    def _build_env_dump_script(self) -> str:
+        if not self._log_environment_enabled:
+            return ''
+        r, g, b = self._env_color_rgb()
+        color_seq = f'\033[38;2;{r};{g};{b}m'
+        reset_seq = '\033[0m'
+        return (
+            f'printf "{color_seq}-------- ENV --------{reset_seq}\\n"; '
+            'env | sort | while IFS= read -r line; do '
+            f'printf "{color_seq}%s{reset_seq}\\n" "$line"; '
+            'done; '
+            f'printf "{color_seq}------------ END ENV ---------{reset_seq}\\n"; '
+            'printf "\\n"; '
+            'printf "\\n"; '
+        )
+
     def _wrap_line_buffered(self, inner: str) -> str:
         # ensure unbuffered python, utf8, and force line buffered stdout and stderr when available
         # no TTY required
+        env_dump = self._build_env_dump_script()
         command = inner
+        if env_dump:
+            script = f'{env_dump}{inner}'
+            command = f"bash -lc {self._sh_quote(script)}"
         bashrc_prefix = ''
         if self._container_bashrc_enabled and self._container_bashrc_path:
             quoted = self._sh_quote(self._container_bashrc_path)
