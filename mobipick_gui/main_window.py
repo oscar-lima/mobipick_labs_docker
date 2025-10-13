@@ -1866,11 +1866,13 @@ class MainWindow(QMainWindow):
         # ensure unbuffered python, utf8, and force line buffered stdout and stderr when available
         # no TTY required
         command = inner
+        bashrc_prefix = ''
         if self._container_bashrc_enabled and self._container_bashrc_path:
             quoted = self._sh_quote(self._container_bashrc_path)
-            command = f'if [ -f {quoted} ]; then source {quoted}; fi; {command}'
+            bashrc_prefix = f'if [ -f {quoted} ]; then source {quoted}; fi; '
         return (
             'export PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8; '
+            f'{bashrc_prefix}'
             'if command -v stdbuf >/dev/null 2>&1; then '
             f'stdbuf -oL -eL {command}; '
             'else '
