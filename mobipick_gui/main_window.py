@@ -2089,11 +2089,7 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
 
-            terminal_script = self._container_bashrc_snippet()
-            env_dump = self._build_env_dump_script()
-            if env_dump:
-                terminal_script += env_dump
-            terminal_script += 'exec bash -i'
+            terminal_script = self._container_bashrc_snippet() + 'bash -i'
 
             command_parts = [
                 'docker', 'compose', 'run', '--rm', '--name', container_name,
@@ -2245,10 +2241,16 @@ class MainWindow(QMainWindow):
         tab.container_name = container_name
         tab.exec_id = exec_id
         quoted = self._sh_quote(container_name)
+        env_dump = self._build_env_dump_script()
+        env_exec = ''
+        if env_dump:
+            env_script = self._container_bashrc_snippet() + env_dump
+            env_exec = f'docker exec {quoted} bash -lc {self._sh_quote(env_script)}; '
         script = (
             f'until docker container inspect {quoted} >/dev/null 2>&1; do '
             'sleep 0.2; '
             'done; '
+            f'{env_exec}'
             f'docker logs -f --tail 0 {quoted}'
         )
         tab.start_program('bash', ['-lc', script])
