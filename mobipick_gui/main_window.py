@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self._container_bashrc_path = path_value.strip() if isinstance(path_value, str) else ''
         enable_value = self._container_bashrc_cfg.get('enable', True)
         self._container_bashrc_enabled = bool(enable_value) and bool(self._container_bashrc_path)
+        self._log_environment_enabled = bool(process_cfg.get('log_environment', False))
         self._docker_cp_config = load_docker_cp_config()
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
@@ -728,27 +729,27 @@ class MainWindow(QMainWindow):
         tab = self._prepare_tab_for_origin('log', 'gui')
         tab.output.enqueue(True, '<br>')
 
-    def _log_environment_block(self, env: QProcessEnvironment | None):
-        if env is None:
+    def _log_environment_block(self, tab_key: str, env: QProcessEnvironment | None):
+        if not self._log_environment_enabled or env is None:
             return
         try:
-            keys = sorted(str(key) for key in env.keys())
+            keys = sorted(str(env_key) for env_key in env.keys())
         except Exception:
             return
 
         lines = ['-------- ENV --------']
-        for key in keys:
-            value = env.value(key)
-            lines.append(f'{key}={value}')
+        for env_key in keys:
+            value = env.value(env_key)
+            lines.append(f'{env_key}={value}')
         lines.append('------------ END ENV ---------')
 
         for line in lines:
             escaped = html.escape(line)
-            self._append_gui_html('log', escaped, color=self._env_log_color)
+            self._append_gui_html(tab_key, escaped, color=self._env_log_color)
             self._console_log(3, line)
 
-        self._append_log_blank_line()
-        self._append_log_blank_line()
+        self._append_gui_html(tab_key, '&nbsp;', color=self._env_log_color)
+        self._append_gui_html(tab_key, '&nbsp;', color=self._env_log_color)
 
     def _log_event(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')

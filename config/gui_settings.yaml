@@ -5,6 +5,7 @@ log:
   text_color: "#ffffff"         # default text color for plain log lines
   gui_log_color: "#ff00ff"      # color for GUI-generated status messages
   command_log_color: "#4da3ff"  # color for command lines emitted by the GUI
+  env_log_color: "#d2b48c"      # color for optional environment dumps shown in process tabs
   font_family: "monospace"      # font family used for log text
   scroll_tolerance_min: 2       # how close (in scroll units) the user must be to the bottom for auto-scroll to stay enabled
 
@@ -39,6 +40,7 @@ process:
   compose_run_env:
     PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
+  log_environment: false                      # when true, show the resolved environment for each container before it starts
   container_bashrc:
     enable: true                              # when true, source the configured bashrc inside containers before commands
     path: "/root/.bashrc"                     # path to the bashrc file to source within launched containers

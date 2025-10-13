@@ -22,6 +22,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'text_color': '#ffffff',
         'gui_log_color': '#ff00ff',
         'command_log_color': '#4da3ff',
+        'env_log_color': '#d2b48c',
         'font_family': 'monospace',
         'scroll_tolerance_min': 2,
     },
@@ -62,6 +63,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'PYTHONUNBUFFERED': '1',
             'PYTHONIOENCODING': 'UTF-8',
         },
+        'log_environment': False,
         'container_bashrc': {
             'enable': True,
             'path': '/root/.bashrc',

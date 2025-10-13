@@ -39,7 +39,7 @@ class ProcessTab:
 
     def start_shell(self, bash_cmd: str):
         env = self._apply_env()
-        self.parent._log_environment_block(env)
+        self.parent._log_environment_block(self.key, env)
         self.parent._append_gui_html(
             self.key,
             f'<i>&gt; {html.escape(bash_cmd)}</i>',
@@ -51,7 +51,7 @@ class ProcessTab:
     def start_program(self, program: str, args: list[str]):
         cmdline = program + ' ' + ' '.join(args)
         env = self._apply_env()
-        self.parent._log_environment_block(env)
+        self.parent._log_environment_block(self.key, env)
         self.parent._append_gui_html(
             self.key,
             f'<i>&gt; {html.escape(cmdline)}</i>',
