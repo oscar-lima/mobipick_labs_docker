@@ -101,6 +101,12 @@ class MainWindow(QMainWindow):
         self._terminal_stream_tab_key: str | None = None
         self._terminal_stream_counter = 0
         self._project_root = PROJECT_ROOT
+        process_cfg = CONFIG.get('process', {}) or {}
+        self._container_bashrc_cfg = process_cfg.get('container_bashrc', {}) or {}
+        path_value = self._container_bashrc_cfg.get('path', '')
+        self._container_bashrc_path = path_value.strip() if isinstance(path_value, str) else ''
+        enable_value = self._container_bashrc_cfg.get('enable', True)
+        self._container_bashrc_enabled = bool(enable_value) and bool(self._container_bashrc_path)
         self._docker_cp_config = load_docker_cp_config()
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
@@ -1859,12 +1865,16 @@ class MainWindow(QMainWindow):
     def _wrap_line_buffered(self, inner: str) -> str:
         # ensure unbuffered python, utf8, and force line buffered stdout and stderr when available
         # no TTY required
+        command = inner
+        if self._container_bashrc_enabled and self._container_bashrc_path:
+            quoted = self._sh_quote(self._container_bashrc_path)
+            command = f'if [ -f {quoted} ]; then source {quoted}; fi; {command}'
         return (
             'export PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8; '
             'if command -v stdbuf >/dev/null 2>&1; then '
-            f'stdbuf -oL -eL {inner}; '
+            f'stdbuf -oL -eL {command}; '
             'else '
-            f'{inner}; '
+            f'{command}; '
             'fi'
         )
 

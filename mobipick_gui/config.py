@@ -62,6 +62,10 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'PYTHONUNBUFFERED': '1',
             'PYTHONIOENCODING': 'UTF-8',
         },
+        'container_bashrc': {
+            'enable': True,
+            'path': '/root/.bashrc',
+        },
     },
     'exit': {
         'dialog_title': 'Shutting Down',

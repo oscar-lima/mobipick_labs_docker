@@ -39,6 +39,9 @@ process:
   compose_run_env:
     PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
+  container_bashrc:
+    enable: true                              # when true, source the configured bashrc inside containers before commands
+    path: "/root/.bashrc"                     # path to the bashrc file to source within launched containers
 
 images:
   default: "brean/mobipick_labs:noetic"       # image:tag selected by default when the GUI starts
