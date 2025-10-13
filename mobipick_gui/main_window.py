@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
+        self._env_log_color = str(CONFIG['log'].get('env_log_color', '#d2b48c'))
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -720,6 +721,34 @@ class MainWindow(QMainWindow):
         line = f'[{ts}] $ {fmt}'
         self._append_gui_html('log', html.escape(line), color=self._command_log_color)
         self._console_log(3, line)
+
+    def _append_log_blank_line(self):
+        if 'log' not in self.tasks:
+            return
+        tab = self._prepare_tab_for_origin('log', 'gui')
+        tab.output.enqueue(True, '<br>')
+
+    def _log_environment_block(self, env: QProcessEnvironment | None):
+        if env is None:
+            return
+        try:
+            keys = sorted(str(key) for key in env.keys())
+        except Exception:
+            return
+
+        lines = ['-------- ENV --------']
+        for key in keys:
+            value = env.value(key)
+            lines.append(f'{key}={value}')
+        lines.append('------------ END ENV ---------')
+
+        for line in lines:
+            escaped = html.escape(line)
+            self._append_gui_html('log', escaped, color=self._env_log_color)
+            self._console_log(3, line)
+
+        self._append_log_blank_line()
+        self._append_log_blank_line()
 
     def _log_event(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')

@@ -38,24 +38,26 @@ class ProcessTab:
         self.exec_id: str | None = None
 
     def start_shell(self, bash_cmd: str):
+        env = self._apply_env()
+        self.parent._log_environment_block(env)
         self.parent._append_gui_html(
             self.key,
             f'<i>&gt; {html.escape(bash_cmd)}</i>',
             color=self.parent._command_log_color,
         )
         self.parent._log_cmd(bash_cmd)
-        self._apply_env()
         self.proc.start('bash', ['-lc', bash_cmd])
 
     def start_program(self, program: str, args: list[str]):
         cmdline = program + ' ' + ' '.join(args)
+        env = self._apply_env()
+        self.parent._log_environment_block(env)
         self.parent._append_gui_html(
             self.key,
             f'<i>&gt; {html.escape(cmdline)}</i>',
             color=self.parent._command_log_color,
         )
         self.parent._log_cmd([program] + args)
-        self._apply_env()
         self.proc.start(program, args)
 
     def pid(self) -> int | None:
@@ -109,6 +111,7 @@ class ProcessTab:
     def _apply_env(self):
         env = self.parent._build_process_environment()
         self.proc.setProcessEnvironment(env)
+        return env
 
     def refresh_environment(self):
         if not self.is_running():
