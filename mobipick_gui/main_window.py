@@ -1900,6 +1900,12 @@ class MainWindow(QMainWindow):
             'printf "\\n"; '
         )
 
+    def _container_bashrc_snippet(self) -> str:
+        if not (self._container_bashrc_enabled and self._container_bashrc_path):
+            return ''
+        quoted = self._sh_quote(self._container_bashrc_path)
+        return f'if [ -f {quoted} ]; then source {quoted}; fi; '
+
     def _wrap_line_buffered(self, inner: str) -> str:
         # ensure unbuffered python, utf8, and force line buffered stdout and stderr when available
         # no TTY required
@@ -1908,10 +1914,7 @@ class MainWindow(QMainWindow):
         if env_dump:
             script = f'{env_dump}{inner}'
             command = f"bash -lc {self._sh_quote(script)}"
-        bashrc_prefix = ''
-        if self._container_bashrc_enabled and self._container_bashrc_path:
-            quoted = self._sh_quote(self._container_bashrc_path)
-            bashrc_prefix = f'if [ -f {quoted} ]; then source {quoted}; fi; '
+        bashrc_prefix = self._container_bashrc_snippet()
         return (
             'export PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8; '
             f'{bashrc_prefix}'
@@ -2086,13 +2089,19 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
 
+            terminal_script = self._container_bashrc_snippet()
+            env_dump = self._build_env_dump_script()
+            if env_dump:
+                terminal_script += env_dump
+            terminal_script += 'exec bash -i'
+
             command_parts = [
                 'docker', 'compose', 'run', '--rm', '--name', container_name,
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
                 *self._compose_env_args(),
-                'mobipick_cmd', 'bash'
+                'mobipick_cmd', 'bash', '-lc', terminal_script
             ]
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
