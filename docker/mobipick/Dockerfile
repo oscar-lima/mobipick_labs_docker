@@ -1,4 +1,4 @@
-FROM brean/mir_robot:noetic
+FROM ozkrelo/mir:noetic
 
 ENV CATKIN_WS=/root/catkin_ws
 ENV CATKIN_WS_SRC=${CATKIN_WS}/src

@@ -1,15 +1,40 @@
-ARG ROS_DISTRO
-FROM ros:${ROS_DISTRO}-ros-core
+# default to noetic if not provided at build time
+ARG ROS_DISTRO=noetic
+FROM ozkrelo/ros-noetic-core:snapshot-20250530
 
-ENV DEBIAN_FRONTEND noninteractive
+# use bash for `source` and better scripting
+SHELL ["/bin/bash", "-lc"]
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential python3-rosdep python3-catkin-lint python3-catkin-tools git \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+ENV DEBIAN_FRONTEND=noninteractive \
+    APT_LISTCHANGES_FRONTEND=none \
+    ROS_DISTRO=${ROS_DISTRO} \
+    CATKIN_WS=/root/catkin_ws \
+    CATKIN_WS_SRC=/root/catkin_ws/src
 
-# install (nearly) all requirements for gazebo and autonomous navigation for MiR 100 so we can use the docker-cache and re-building does not take forever
-RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends \
+# make apt resilient to snapshot hiccups and slow mirrors
+# - retry fetches
+# - increase timeouts
+RUN set -eux \
+ && printf '%s\n' \
+    'Acquire::Retries "6";' \
+    'Acquire::http::Timeout "60";' \
+    'Acquire::https::Timeout "60";' \
+    'Acquire::http::No-Cache "true";' \
+    'Acquire::https::No-Cache "true";' \
+    > /etc/apt/apt.conf.d/99resilience \
+ && apt-get update -qq \
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      python3-rosdep \
+      python3-catkin-lint \
+      python3-catkin-tools \
+      git \
+ && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# install Gazebo and MiR navigation deps
+RUN set -eux \
+ && apt-get update -qq \
+ && declare -a PKGS=( \
         ros-noetic-amcl \
         ros-noetic-diff-drive-controller \
         ros-noetic-gazebo-plugins \
@@ -755,20 +780,26 @@ RUN apt-get update -qq \
         xkb-data \
         xorg-sgml-doctools \
         xtrans-dev \
-    && rm -rf /var/lib/apt/lists/*
+ ) \
+ && apt-get install -y --no-install-recommends "${PKGS[@]}" \
+ || { \
+      echo "apt install encountered fetch errors, retrying once with --fix-missing"; \
+      apt-get -o Acquire::Retries=6 install -y --no-install-recommends --fix-missing "${PKGS[@]}"; \
+    } \
+ && rm -rf /var/lib/apt/lists/*
 
-ENV CATKIN_WS=/root/catkin_ws
-ENV CATKIN_WS_SRC=${CATKIN_WS}/src
-ENV DEBIAN_FRONTEND=noninteractive
+# workspace
+RUN mkdir -p "${CATKIN_WS_SRC}" \
+ && cd "${CATKIN_WS_SRC}" \
+ && git clone -b "${ROS_DISTRO}" https://github.com/DFKI-NI/mir_robot.git
 
-RUN mkdir -p ${CATKIN_WS_SRC} \
-  && cd ${CATKIN_WS_SRC} \
-  && git clone -b ${ROS_DISTRO}-hook https://github.com/brean/mir_robot.git
+# build
+RUN source "/opt/ros/${ROS_DISTRO}/setup.bash" \
+ && cd "${CATKIN_WS}" \
+ && catkin config --extend "/opt/ros/${ROS_DISTRO}" \
+ && catkin build
 
-RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
-    && cd ${CATKIN_WS} \
-    && catkin build
-
+# entrypoint
 COPY ./entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-ENTRYPOINT [ "/entrypoint.sh" ]
+ENTRYPOINT ["/entrypoint.sh"]
