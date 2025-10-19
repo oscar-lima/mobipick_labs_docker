@@ -1,0 +1,33 @@
+# This Dockerfile implements the provided natural language steps in dockerfile_prompt.txt,
+# manual editing is not recommended.
+FROM ozkrelo/mobipick_labs:noetic
+
+# Install interactive shells, editors, VCS, directory tree printer, syntax highlighter, and locate
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt update && apt install -y \
+    ipython3 \
+    vim \
+    nano \
+    git-core \
+    tree \
+    python3-pygments \
+    mlocate
+
+# Fetch helper scripts into $HOME and enable them from the root user's bash profile
+RUN set -eux; \
+    cd "$HOME"; \
+    git clone https://github.com/oscar-lima/mobipick_labs_scripts.git scripts; \
+    printf '\n# personal config starts here\nsource $HOME/scripts/permanent.sh\n' \
+      >> /root/.bashrc; \
+    install -d "$HOME/scripts/personal_config"; \
+    cp -a "$HOME/scripts/others/personal_config_example/." \
+      "$HOME/scripts/personal_config/"
+
+# Switch a workspace dependency to a specific upstream branch and rebuild the catkin workspace
+RUN set -eux; \
+    cd /root/catkin_ws/src/mir_robot; \
+    git remote add oscar https://github.com/oscar-lima/mir_robot.git || true; \
+    git fetch oscar path-follower-critic; \
+    git checkout path-follower-critic; \
+    cd /root/catkin_ws; \
+    catkin build

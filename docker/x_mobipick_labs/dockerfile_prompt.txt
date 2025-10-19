@@ -1,0 +1,63 @@
+# This represents steps in natural language to be converted into Dockerfile by an AI
+
+prompt: "Convert the following steps into a Dockerfile with the constraints below."
+model used: gpt-5 (standard) thinking
+
+# Constraints: (for the AI model)
+
+- Prefer apt over apt-get
+- your base images are:
+  ozkrelo/[focal-snapshot (Ubuntu 20.04), noetic-ros-core (ROS1), mir, mobipick, mobipick_labs]
+- Do not copy user text verbatim. Rephrase step descriptions in comments.
+- Wrap lines to at most 90 columns.
+- Do not place comments after package names in apt install lines.
+- Avoid using mkdir -p unless explicitly requested.
+- Do not remove /var/lib/apt/lists/* after installing pkgs
+- First line of the Dockerfile must be the exact two line comment:
+   "# This Dockerfile implements the provided natural language steps in
+      dockerfile_prompt.txt,
+      manual editing is not recommended."
+- Base image to use: ozkrelo/mobipick_labs:noetic
+- Output only one fenced code block labeled Dockerfile, with no extra text.
+
+# Steps
+
+## install custom pkgs
+
+list="
+    ipython3          # python console editor
+    vim, nano         # terminal text editors
+    git-core          # git
+    tree              # draw (print) folder structure from terminal
+    python-pygments   # to cat files in colors
+    mlocate
+"
+
+apt update
+apt install <list>
+
+## custom bashrc
+
+clone scripts repo in $HOME, so `cd $HOME` and git clone https://github.com/oscar-lima/mobipick_labs_scripts.git as "scripts"
+
+add this lines of code at the end of .bashrc that lives under /root/.bashrc to "activate" scripts (custom bashrc)
+
+```
+# personal config starts here
+source $HOME/scripts/permanent.sh
+```
+
+copy all files from ~/scripts/others/personal_config_example/ to ~/scripts/personal_config/ within the container
+
+## use custom branches on certain repos
+
+Use https://github.com/oscar-lima/mir_robot/tree/path-follower-critic instead of https://github.com/DFKI-NI/mir_robot
+this involves:
+
+```bash
+cd /root/catkin_ws/src/mir_robot
+git remote add oscar https://github.com/oscar-lima/mir_robot.git
+git fetch oscar path-follower-critic
+git checkout path-follower-critic
+catkin build
+```
