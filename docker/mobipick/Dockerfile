@@ -592,6 +592,18 @@ RUN apt-get update -qq \
         ros-noetic-industrial-robot-status-controller \
         ros-noetic-twist-controller \
         ros-noetic-pcl-ros \
+        ros-noetic-mir-actions \
+        ros-noetic-mir-description \
+        ros-noetic-mir-driver \
+        ros-noetic-mir-msgs \
+        ros-noetic-mir-actions \
+        ros-noetic-mir-description \
+        ros-noetic-mir-driver \
+        ros-noetic-mir-gazebo \
+        ros-noetic-mir-msgs \
+        ros-noetic-mir-dwb-critics \
+        ros-noetic-mir-navigation \
+        ros-noetic-mir-dwb-critics \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cd ${CATKIN_WS_SRC} \
