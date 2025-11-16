@@ -1,0 +1,14 @@
+services:
+  custom_user:
+    image: ozkrelo/x_mobipick_labs:custom_user_from_1.2
+    stdin_open: true       # equivalent to: docker run -i
+    tty: true              # equivalent to: docker run -t
+    working_dir: ${HOME}
+    # volumes:
+      # Mount local .bashrc into the container as read-only.
+      # Adjust the host path if your .bashrc lives elsewhere.
+    #  - ./bashrc:${HOME}/.bashrc:ro
+    # Do not override entrypoint/command so the image's default
+    # behavior (which already uses .bashrc) remains intact.
+    # To get an interactive shell:
+    #   docker compose run --rm custom_user bash
