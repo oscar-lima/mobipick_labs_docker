@@ -18,10 +18,8 @@ ozkrelo/focal-snapshot:20250530
           ozkrelo/x_mobipick_labs:noetic-v1.1
           ozkrelo/x_mobipick_labs:noetic-v1.2
 
-           *ozkrelo/x_mobipick_labs:oscar_user_from_1.2
+           # from here on is no longer possible to pull from docker hub
+           *ozkrelo/x_mobipick_labs:custom_user_from_1.2
                                         ENTRYPOINT ["/usr/local/bin/entrypoint_user.sh"]
                                         CMD ["bash"]
-
-             ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user
-             ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user
 ```
