@@ -2,7 +2,7 @@
 # This is an auto generated Dockerfile for ros:ros-core
 # generated from docker_images/create_ros_core_image.Dockerfile.em
 # FROM ubuntu:focal
-FROM ozkrelo/focal-snapshot:20250530
+FROM ozkrelo/focal-snapshot:20260625
 
 # setup timezone
 RUN echo 'Etc/UTC' > /etc/timezone && \
