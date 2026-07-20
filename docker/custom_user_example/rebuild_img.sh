@@ -1,6 +1,6 @@
 #!/bin/bash
 
-tag="$USER"_user_from_1.2
+tag="$USER"_user_from_2.0
 
 # Build the Docker image inheriting UID and GID from the host user
 # to avoid permission issues with mounted volumes.

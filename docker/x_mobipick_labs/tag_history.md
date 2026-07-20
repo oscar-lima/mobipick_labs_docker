@@ -14,3 +14,7 @@ v1.2, derived FROM ozkrelo/mobipick:noetic-v1.1
 - install precommit via pip
 - update alternatives for python is python3
 - now derives from an image that has mir pkgs installed from apt
+
+v2.0
+
+- rebuild image in June 2026, no other changes

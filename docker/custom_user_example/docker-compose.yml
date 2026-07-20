@@ -1,6 +1,6 @@
 services:
   custom_user:
-    image: ozkrelo/x_mobipick_labs:custom_user_from_1.2
+    image: ozkrelo/x_mobipick_labs:custom_user_from_2.0
     stdin_open: true       # equivalent to: docker run -i
     tty: true              # equivalent to: docker run -t
     working_dir: ${HOME}

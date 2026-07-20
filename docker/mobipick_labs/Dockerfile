@@ -1,4 +1,4 @@
-FROM ozkrelo/mobipick:noetic-v1.1
+FROM ozkrelo/mobipick:noetic-v2.0
 
 ENV CATKIN_WS=/root/catkin_ws
 ENV CATKIN_WS_SRC=${CATKIN_WS}/src

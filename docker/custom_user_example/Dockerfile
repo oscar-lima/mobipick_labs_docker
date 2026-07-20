@@ -1,4 +1,4 @@
-FROM ozkrelo/x_mobipick_labs:noetic-v1.1
+FROM ozkrelo/x_mobipick_labs:noetic-v2.0
 
 # remove old /entrypoint.sh to avoid confusion
 RUN rm -f /entrypoint.sh

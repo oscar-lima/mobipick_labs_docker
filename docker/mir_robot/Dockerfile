@@ -1,6 +1,6 @@
 # default to noetic if not provided at build time
 ARG ROS_DISTRO=noetic
-FROM ozkrelo/ros-noetic-core:snapshot-20250530
+FROM ozkrelo/noetic-ros-core:ubuntu20260625
 
 # use bash for `source` and better scripting
 SHELL ["/bin/bash", "-lc"]

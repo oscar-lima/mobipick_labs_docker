@@ -8,3 +8,7 @@ noetic (NOTE: this image is in dockerhub)
 noetic-v1.1
 
 - install mir pkgs from apt
+
+noetic-v2.0
+
+- rebuild image in June 2026, no other changes

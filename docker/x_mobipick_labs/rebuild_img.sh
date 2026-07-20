@@ -1,6 +1,10 @@
 #!/bin/bash
+set -euo pipefail
 
-version=1.2
+version=2.0
 tag=noetic-v$version
 
-docker build -t ozkrelo/x_mobipick_labs:$tag .
+image="ozkrelo/x_mobipick_labs:$tag"
+
+docker build --no-cache -t "$image" .
+# docker push "$image"
