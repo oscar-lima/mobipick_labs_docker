@@ -1,6 +1,6 @@
 # This Dockerfile implements the provided natural language steps in dockerfile_prompt.txt,
 # manual editing is not recommended.
-FROM ozkrelo/mobipick:noetic-v2.0
+FROM ozkrelo/mobipick_labs:noetic-v2.0
 
 # Install interactive shells, editors, VCS, directory tree printer, syntax highlighter, and locate
 ENV DEBIAN_FRONTEND=noninteractive

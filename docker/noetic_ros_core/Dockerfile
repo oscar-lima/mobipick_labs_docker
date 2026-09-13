@@ -2,6 +2,42 @@
 # This is an auto generated Dockerfile for ros:ros-core
 # generated from docker_images/create_ros_core_image.Dockerfile.em
 # FROM ubuntu:focal
+ARG WAYLAND_VERSION=1.20.0
+ARG WAYLAND_SHA256=b8a034154c7059772e0fdbd27dbfcda6c732df29cae56a82274f6ec5d7cd8725
+
+FROM ozkrelo/focal-snapshot:20260625 AS wayland-builder
+
+ARG WAYLAND_VERSION
+ARG WAYLAND_SHA256
+
+# NVIDIA EGL-Wayland v2 requires wl_proxy_marshal_flags, which is absent from
+# Ubuntu Focal's Wayland 1.18 runtime.
+RUN apt-get update && apt-get install -q -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libffi-dev \
+        meson \
+        ninja-build \
+        pkg-config \
+        xz-utils \
+    && curl -fsSL \
+        "https://wayland.freedesktop.org/releases/wayland-${WAYLAND_VERSION}.tar.xz" \
+        -o /tmp/wayland.tar.xz \
+    && echo "${WAYLAND_SHA256}  /tmp/wayland.tar.xz" | sha256sum -c - \
+    && tar -C /tmp -xf /tmp/wayland.tar.xz \
+    && meson setup /tmp/wayland-build "/tmp/wayland-${WAYLAND_VERSION}" \
+        --prefix=/usr/local \
+        --libdir=lib \
+        -Ddocumentation=false \
+        -Ddtd_validation=false \
+        -Dscanner=false \
+        -Dtests=false \
+    && ninja -C /tmp/wayland-build \
+    && DESTDIR=/wayland-root ninja -C /tmp/wayland-build install \
+    && nm -D /wayland-root/usr/local/lib/libwayland-client.so.0 \
+        | grep -q ' wl_proxy_marshal_flags$'
+
 FROM ozkrelo/focal-snapshot:20260625
 
 # setup timezone
@@ -17,7 +53,11 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
     curl \
     dirmngr \
     gnupg2 \
+    qtwayland5 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=wayland-builder /wayland-root/usr/local/ /usr/local/
+RUN ldconfig
 
 
 # setup keys
