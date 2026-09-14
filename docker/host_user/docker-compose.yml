@@ -3,7 +3,6 @@ services:
     image: ozkrelo/x_mobipick_labs:${USER}_user_from_2.0
     stdin_open: true       # equivalent to: docker run -i
     tty: true              # equivalent to: docker run -t
-    working_dir: ${HOME}
     # volumes:
       # Mount local .bashrc into the container as read-only.
       # Adjust the host path if your .bashrc lives elsewhere.
