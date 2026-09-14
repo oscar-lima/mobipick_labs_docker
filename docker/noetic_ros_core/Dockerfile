@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
+        libexpat1-dev \
         libffi-dev \
         meson \
         ninja-build \
@@ -31,7 +32,7 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
         --libdir=lib \
         -Ddocumentation=false \
         -Ddtd_validation=false \
-        -Dscanner=false \
+        -Dscanner=true \
         -Dtests=false \
     && ninja -C /tmp/wayland-build \
     && DESTDIR=/wayland-root ninja -C /tmp/wayland-build install \
@@ -53,11 +54,21 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
     curl \
     dirmngr \
     gnupg2 \
+    libdrm2 \
+    libgbm1 \
     qtwayland5 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=wayland-builder /wayland-root/usr/local/ /usr/local/
-RUN ldconfig
+RUN set -eux; \
+    dpkg --compare-versions \
+        "$(dpkg-query -W -f='${Version}' libdrm2)" ge 2.4.99; \
+    dpkg --compare-versions \
+        "$(dpkg-query -W -f='${Version}' libgbm1)" ge 21.2; \
+    ldconfig; \
+    test "$(ldconfig -p | awk \
+        '/libwayland-client.so.0/{print $NF; exit}')" = \
+        /usr/local/lib/libwayland-client.so.0
 
 
 # setup keys
