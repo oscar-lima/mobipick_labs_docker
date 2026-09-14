@@ -62,3 +62,16 @@ ozkrelo/focal-snapshot/20260625
 # Custom projects
 
 GPT ws and RAE ws : FROM ozkrelo/x_mobipick_labs:oscar_user_from_1.2
+
+# Rebuilding the image chain
+
+Run the master rebuild script from any directory:
+
+```bash
+/path/to/docker/build.bash
+```
+
+The script asks before starting whether the publishable images should be pushed.
+It then runs every `rebuild_img.sh` in dependency order and stops immediately if
+one fails. Images are pushed only after all rebuilds succeed. The machine-specific
+`host_user` image is rebuilt but is not pushed.
