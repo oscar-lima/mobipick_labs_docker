@@ -567,6 +567,8 @@ RUN apt-get update -qq \
         ros-noetic-ur-description \
         ros-noetic-joy \
         ros-noetic-moveit-ros-benchmarks \
+        ros-noetic-moveit-task-constructor-visualization \
+        ros-noetic-moveit-servo \
         ros-noetic-ompl \
         ros-noetic-moveit-planners-chomp \
         ros-noetic-twist-controller \
