@@ -71,7 +71,8 @@ Run the master rebuild script from any directory:
 /path/to/docker/build.bash
 ```
 
-The script asks before starting whether the publishable images should be pushed.
-It then runs every `rebuild_img.sh` in dependency order and stops immediately if
-one fails. Images are pushed only after all rebuilds succeed. The machine-specific
-`host_user` image is rebuilt but is not pushed.
+The script asks which image to start from, then whether to push the rebuilt
+publishable images. It runs `rebuild_img.sh` for the selected image and every
+later image in dependency order, stopping immediately if one fails. Only images
+rebuilt in this run are pushed, and only after all rebuilds succeed. The
+machine-specific `host_user` image is rebuilt but is not pushed.
