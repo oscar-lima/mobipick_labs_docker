@@ -608,6 +608,12 @@ RUN apt-get update -qq \
         ros-noetic-mir-dwb-critics \
     && rm -rf /var/lib/apt/lists/*
 
+# compressed and theora image transport, so a remote RViz over Wi-Fi can use the compressed transport hint (#181)
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+        ros-noetic-image-transport-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN cd ${CATKIN_WS_SRC} \
   && git clone https://github.com/DFKI-NI/mobipick.git\
   && . ${CATKIN_WS}/devel/setup.sh \
